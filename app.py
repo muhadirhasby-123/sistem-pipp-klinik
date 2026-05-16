@@ -120,7 +120,7 @@ if mode_aplikasi == "Lapor Keluhan (Pasien)":
                 conn = init_db()
                 conn.execute('''INSERT INTO pipp 
                                 (waktu_input, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, foto_bukti, is_real) 
-                                VALUES (?,?,?,?,?,?,?,?,'[MENUNGGU TINDAKAN]',?,1)''',
+                                VALUES (?,?,?,?,?,?,?,'[MENUNGGU TINDAKAN]',?,1)''',
                              (waktu_sekarang, bpjs_p, nama_p, alamat_p, telp_p, jenis, keluhan_p, foto_bytes))
                 conn.commit()
                 
