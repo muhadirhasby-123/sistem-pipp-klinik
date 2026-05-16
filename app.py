@@ -5,28 +5,35 @@ import io
 import requests
 from datetime import datetime
 
-# --- 1. PENGATURAN ADMIN & NOTIFIKASI ---
-# Ganti dengan PIN rahasia untuk Mas Hasby & Ibu
+# --- PENGATURAN ADMIN & NOTIFIKASI ---
 PIN_ADMIN_RAHASIA = "123456" 
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" 
+TELEGRAM_CHAT_ID = "PASTE_ID_DISINI"   
 
-# Setup Telegram (Nanti kita isi tokennya jika Mas sudah siap)
-TELEGRAM_BOT_TOKEN = "8965561257:AAEpgrwaBQLpR114JITZZriF5BZhzZtNVnM" 
-TELEGRAM_CHAT_ID = "2141502195" 
-
-def kirim_notif_telegram(pesan_teks):
-    """Fungsi mengirim notifikasi teks ke grup Telegram Admin"""
+def kirim_notif_telegram_dengan_file(pesan_teks, uploaded_file):
+    """Fungsi mengirim teks DAN meneruskan file ke Telegram"""
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan_teks, "parse_mode": "HTML"}
-        try:
-            requests.post(url, json=payload)
-        except Exception as e:
-            pass # Abaikan jika gagal agar web pasien tidak error
+        # 1. Kirim Teksnya dulu
+        url_text = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url_text, json={"chat_id": TELEGRAM_CHAT_ID, "text": pesan_teks, "parse_mode": "HTML"})
+        
+        # 2. Jika ada lampiran, kirim sebagai Dokumen ke Telegram
+        if uploaded_file is not None:
+            url_doc = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+            file_bytes = uploaded_file.getvalue()
+            # File dikirim langsung ke server Telegram
+            files = {'document': (uploaded_file.name, file_bytes)}
+            data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': "Lampiran Bukti dari Pasien"}
+            try:
+                requests.post(url_doc, data=data, files=files)
+            except Exception as e:
+                pass 
 
-# --- 2. DATABASE SETUP & MIGRATION ---
+# --- DATABASE SETUP (VERSI SUPER RINGAN) ---
 def init_db():
     conn = sqlite3.connect('klinik_pipp.db')
     c = conn.cursor()
+    # Kita hapus foto_bukti BLOB agar database tidak berat!
     c.execute('''CREATE TABLE IF NOT EXISTS pipp (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     waktu_input DATETIME,
@@ -37,33 +44,24 @@ def init_db():
                     jenis_laporan TEXT,
                     keluhan TEXT,
                     solusi TEXT,
-                    foto_bukti BLOB,
                     is_real INTEGER)''')
-    
-    # Auto-Migration jika pakai database lama
-    try:
-        c.execute("ALTER TABLE pipp ADD COLUMN alamat TEXT")
-        c.execute("ALTER TABLE pipp ADD COLUMN waktu_input DATETIME")
-    except sqlite3.OperationalError:
-        pass 
-        
     conn.commit()
     return conn
 
-# --- 3. EXCEL GENERATOR ---
-def create_excel(df):
+# --- EXCEL GENERATOR (KHUSUS BPJS) ---
+def create_excel_bpjs(df):
     output = io.BytesIO()
     export_df = df.copy()
     export_df.insert(0, 'No', range(1, 1 + len(export_df)))
-    export_df = export_df[['No', 'waktu_input', 'no_bpjs', 'nama_pasien', 'alamat', 'no_telp', 'jenis_laporan', 'keluhan', 'solusi']]
-    export_df.columns = ['No', 'Waktu Masuk', 'No BPJS', 'Nama Pasien', 'Alamat', 'No HP/WA', 'Jenis', 'Keluhan', 'Solusi']
+    export_df = export_df[['No', 'waktu_input', 'no_bpjs', 'nama_pasien', 'no_telp', 'keluhan', 'solusi']]
+    export_df.columns = ['No', 'Tanggal Laporan', 'No BPJS', 'Nama Pasien', 'No Kontak', 'Keluhan Administratif', 'Solusi / Edukasi yang Diberikan']
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        export_df.to_excel(writer, index=False, sheet_name='Laporan')
-        worksheet = writer.sheets['Laporan']
+        export_df.to_excel(writer, index=False, sheet_name='Laporan PIPP BPJS')
+        worksheet = writer.sheets['Laporan PIPP BPJS']
         from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
         
-        header_fill = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+        header_fill = PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid")
         for cell in worksheet["1:1"]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.alignment = Alignment(horizontal="center")
@@ -75,7 +73,7 @@ def create_excel(df):
                 cell.border = Border(top=thin, left=thin, right=thin, bottom=thin)
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
                 
-        widths = {'A': 6, 'B': 20, 'C': 18, 'D': 25, 'E': 30, 'F': 15, 'G': 20, 'H': 40, 'I': 40}
+        widths = {'A': 5, 'B': 20, 'C': 18, 'D': 25, 'E': 15, 'F': 45, 'G': 45}
         for col, w in widths.items():
             worksheet.column_dimensions[col].width = w
     return output.getvalue()
@@ -83,16 +81,15 @@ def create_excel(df):
 # --- UI SETUP ---
 st.set_page_config(page_title="Pusat Bantuan Klinik", layout="centered", initial_sidebar_state="collapsed")
 
-# Pemilih Mode di atas (Bukan Sidebar agar lebih ramah HP)
 mode_aplikasi = st.selectbox("Akses Sistem:", ["Lapor Keluhan (Pasien)", "Login Manajemen (Admin)"])
 st.divider()
 
 # =====================================================================
-# MODE 1: FORM PASIEN (Sangat Ringan & Ramah HP)
+# MODE 1: FORM PASIEN
 # =====================================================================
 if mode_aplikasi == "Lapor Keluhan (Pasien)":
     st.header("Layanan Pengaduan & Informasi")
-    st.caption("Manajemen kami siap mendengar dan menindaklanjuti masukan Anda demi pelayanan yang lebih baik.")
+    st.caption("Arahkan kamera HP Anda ke Barcode di Meja Pendaftaran untuk membuka form ini.")
     
     with st.form("form_pasien", clear_on_submit=True):
         nama_p = st.text_input("Nama Lengkap Anda *")
@@ -101,57 +98,44 @@ if mode_aplikasi == "Lapor Keluhan (Pasien)":
         alamat_p = st.text_area("Alamat Lengkap *")
         
         jenis = st.selectbox("Kategori Laporan *", [
-            "PIPP (Informasi Medis, Antrean, Obat)", 
-            "Pengaduan Layanan (Sikap Petugas, Fasilitas, dll)"
+            "PIPP BPJS (Informasi Medis, Antrean, Obat)", 
+            "Pengaduan Internal (Sikap Petugas, Fasilitas, dll)"
         ])
         
         keluhan_p = st.text_area("Detail Laporan / Keluhan Anda *")
         
-        st.write("Lampirkan Foto Bukti (Opsional)")
-        foto_p = st.file_uploader("Pilih Foto", type=['jpg', 'jpeg', 'png'])
+        st.write("Lampirkan Foto/Video/Dokumen Bukti (Opsional, Maks 20MB)")
+        # SEKARANG BISA TERIMA GAMBAR, VIDEO MP4, DAN PDF
+        file_p = st.file_uploader("Pilih File", type=['jpg', 'jpeg', 'png', 'mp4', 'pdf'])
         
         submit_pasien = st.form_submit_button("Kirim Laporan", use_container_width=True)
         
         if submit_pasien:
             if nama_p and bpjs_p and telp_p and alamat_p and keluhan_p:
-                foto_bytes = foto_p.read() if foto_p else None
                 waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 conn = init_db()
+                # Menyimpan teks saja tanpa file agar database super ringan
                 conn.execute('''INSERT INTO pipp 
-                                (waktu_input, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, foto_bukti, is_real) 
-                                VALUES (?,?,?,?,?,?,?,'[MENUNGGU TINDAKAN]',?,1)''',
-                             (waktu_sekarang, bpjs_p, nama_p, alamat_p, telp_p, jenis, keluhan_p, foto_bytes))
+                                (waktu_input, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, is_real) 
+                                VALUES (?,?,?,?,?,?,?,?,1)''',
+                             (waktu_sekarang, bpjs_p, nama_p, alamat_p, telp_p, jenis, keluhan_p, '[MENUNGGU TINDAKAN]'))
                 conn.commit()
                 
-                # Format Pesan Notifikasi ke HP
-                pesan_notif = f"""
-🚨 <b>LAPORAN BARU MASUK!</b> 🚨
-<b>Waktu:</b> {waktu_sekarang}
-<b>Kategori:</b> {jenis}
-
-<b>Nama:</b> {nama_p}
-<b>BPJS:</b> {bpjs_p}
-<b>Kontak:</b> {telp_p}
-
-<b>Detail Keluhan:</b>
-<i>"{keluhan_p}"</i>
-
-Terdapat Foto: {'Ya' if foto_p else 'Tidak'}
-Segera cek dashboard admin untuk menindaklanjuti!
-"""
-                kirim_notif_telegram(pesan_notif)
+                pesan_notif = f"🚨 <b>LAPORAN MASUK!</b> 🚨\n<b>Kategori:</b> {jenis}\n<b>Nama:</b> {nama_p}\n<b>Keluhan:</b> {keluhan_p}"
                 
-                st.success("✅ Terima kasih! Laporan Anda telah berhasil terkirim ke Manajemen.")
+                # Kirim ke Telegram beserta lampiran video/fotonya
+                kirim_notif_telegram_dengan_file(pesan_notif, file_p)
+                
+                st.success("✅ Laporan beserta bukti berhasil terkirim. Manajemen akan segera menindaklanjutinya.")
             else:
                 st.error("Mohon lengkapi semua bidang yang bertanda Bintang (*).")
 
 # =====================================================================
-# MODE 2: DASHBOARD ADMIN KLINIK (Akses Terkunci)
+# MODE 2: DASHBOARD ADMIN KLINIK
 # =====================================================================
 elif mode_aplikasi == "Login Manajemen (Admin)":
     
-    # SISTEM LOGIN PIN
     if "admin_logged_in" not in st.session_state:
         st.session_state.admin_logged_in = False
 
@@ -164,9 +148,7 @@ elif mode_aplikasi == "Login Manajemen (Admin)":
             else:
                 st.error("PIN Salah!")
     
-    # JIKA PIN BENAR, TAMPILKAN DASHBOARD
     else:
-        st.success("Berhasil Login. Akses Diberikan.")
         if st.button("Keluar (Logout)"):
             st.session_state.admin_logged_in = False
             st.rerun()
@@ -174,27 +156,20 @@ elif mode_aplikasi == "Login Manajemen (Admin)":
         st.title("📂 Ruang Kendali Manajemen")
         conn = init_db()
         
-        tab1, tab2 = st.tabs(["Laporan Masuk (Pending)", "Database Arsip Lengkap"])
+        tab1, tab2 = st.tabs(["Menunggu Tindakan", "Database Arsip (Terpisah)"])
 
-        # TAB 1: TINDAK LANJUT
         with tab1:
-            st.subheader("Menunggu Tindakan")
-            df_pending = pd.read_sql_query("SELECT id, waktu_input, nama_pasien, jenis_laporan, keluhan FROM pipp WHERE solusi = '[MENUNGGU TINDAKAN]'", conn)
+            st.subheader("Daftar Antrean Solusi")
+            df_pending = pd.read_sql_query("SELECT id, waktu_input, jenis_laporan, nama_pasien, keluhan FROM pipp WHERE solusi = '[MENUNGGU TINDAKAN]'", conn)
             
             if not df_pending.empty:
                 st.dataframe(df_pending, use_container_width=True)
                 with st.form("form_solusi"):
                     id_laporan = st.selectbox("Selesaikan Laporan ID:", df_pending['id'].tolist())
                     
-                    c = conn.cursor()
-                    c.execute("SELECT foto_bukti FROM pipp WHERE id=?", (id_laporan,))
-                    foto_data = c.fetchone()[0]
-                    if foto_data:
-                        st.image(foto_data, caption="Foto Bukti Pelanggaran/Laporan", width=300)
-                    else:
-                        st.info("Tidak ada foto lampiran.")
+                    st.info("💡 Buka aplikasi Telegram Anda untuk melihat kiriman Video/Foto/Dokumen dari pasien ini.")
                     
-                    solusi_admin = st.text_area("Tuliskan Solusi / Penanganan yang telah dilakukan:")
+                    solusi_admin = st.text_area("Tuliskan Penanganan yang telah dilakukan:")
                     if st.form_submit_button("Simpan & Tutup Laporan"):
                         conn.execute("UPDATE pipp SET solusi=? WHERE id=?", (solusi_admin, id_laporan))
                         conn.commit()
@@ -203,11 +178,29 @@ elif mode_aplikasi == "Login Manajemen (Admin)":
             else:
                 st.info("Semua laporan sudah tertangani.")
 
-        # TAB 2: ARSIP
         with tab2:
-            st.subheader("Arsip Data Keseluruhan")
-            df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
+            st.subheader("Pusat Arsip Data")
+            
+            # Tambahan pengaman jika database error karena struktur tabel berubah
+            try:
+                df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
+            except:
+                df_all = pd.DataFrame()
+                st.error("Database sedang menyesuaikan struktur baru. Laporan berikutnya akan normal.")
+            
             if not df_all.empty:
-                df_display = df_all.drop(columns=['foto_bukti'])
-                st.dataframe(df_display, use_container_width=True)
-                st.download_button("Download Laporan Excel", create_excel(df_all), "Arsip_Klinik.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # Membelah DataFrame
+                df_pipp_bpjs = df_all[df_all['jenis_laporan'].str.contains('PIPP BPJS', na=False)]
+                df_internal = df_all[df_all['jenis_laporan'].str.contains('Pengaduan Internal', na=False)]
+                
+                st.write("---")
+                st.markdown("### 🟢 ARSIP 1: Data Khusus PIPP (Untuk Laporan BPJS)")
+                st.dataframe(df_pipp_bpjs.drop(columns=['id', 'is_real'], errors='ignore'), use_container_width=True)
+                if not df_pipp_bpjs.empty:
+                    st.download_button("📥 Download Excel PIPP BPJS (Resmi)", create_excel_bpjs(df_pipp_bpjs), "Laporan_PIPP_BPJS_Klinik.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+                st.write("---")
+                st.markdown("### 🔴 ARSIP 2: Data Pengaduan Internal (Hanya untuk Manajemen)")
+                st.dataframe(df_internal.drop(columns=['id', 'is_real'], errors='ignore'), use_container_width=True)
+            else:
+                st.info("Belum ada arsip.")
