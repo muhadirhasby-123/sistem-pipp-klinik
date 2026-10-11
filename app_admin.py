@@ -15,6 +15,20 @@ DB_PATH = "klinik_pipp.db"
 
 def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
+# ---> PERBAIKAN: FUNGSI PEMBUAT TABEL DITAMBAHKAN KEMBALI <---
+def init_db():
+    conn = get_conn()
+    conn.execute('''CREATE TABLE IF NOT EXISTS pipp (id INTEGER PRIMARY KEY AUTOINCREMENT, waktu_input DATETIME, waktu_selesai DATETIME, no_bpjs TEXT, nama_pasien TEXT, alamat TEXT, no_telp TEXT, jenis_laporan TEXT, keluhan TEXT, solusi TEXT, link_bukti TEXT, is_real INTEGER, contact_id INTEGER, status TEXT DEFAULT 'Baru', priority TEXT DEFAULT 'Normal', short_link TEXT, consent_wa INTEGER DEFAULT 0)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, whatsapp TEXT UNIQUE, bpjs TEXT, nik TEXT, consent_wa INTEGER DEFAULT 0, first_interaction_at DATETIME, last_interaction_at DATETIME)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS interactions (id INTEGER PRIMARY KEY AUTOINCREMENT, contact_id INTEGER, module TEXT, details TEXT, is_ticketed INTEGER DEFAULT 0, created_at DATETIME)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticket_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER, actor TEXT, action TEXT, note TEXT, is_internal INTEGER DEFAULT 1, created_at DATETIME)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS main_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT, icon TEXT, deskripsi TEXT, accent TEXT, light TEXT, tipe TEXT, urutan INTEGER)''')
+    conn.commit()
+
+# Panggil fungsi ini agar tabel selalu dicek/dibuat
+init_db()
+# -------------------------------------------------------------
+
 def create_excel(df, title):
     output = io.BytesIO()
     export_df = df.copy()
@@ -98,32 +112,35 @@ else:
 
     with tab1:
         st.subheader("Daftar Tiket Membutuhkan Tindakan")
-        df_pending = pd.read_sql_query("SELECT id, waktu_input, status, priority, jenis_laporan, nama_pasien, keluhan FROM pipp WHERE status NOT IN ('Selesai', 'Ditutup') ORDER BY id DESC", conn)
-        if not df_pending.empty:
-            st.dataframe(df_pending, use_container_width=True)
-            with st.form("form_solusi"):
-                st.markdown("### Update Status Tiket")
-                c_id, c_stat, c_pri = st.columns(3)
-                with c_id: id_laporan = st.selectbox("ID Laporan:", df_pending['id'].tolist())
-                with c_stat: status_baru = st.selectbox("Update Status:", ["Ditinjau", "Diproses", "Menunggu Pasien", "Menunggu Unit Lain", "Selesai", "Ditutup"])
-                with c_pri: priority_baru = st.selectbox("Priority:", ["Normal", "Penting", "Mendesak"])
-                
-                st.markdown("---")
-                jenis_update = st.radio("Jenis Catatan:", ["Catatan Internal (Hanya Admin)", "Pembaruan Pasien (Bisa Dilihat Pasien di Link Status)"])
-                solusi_admin = st.text_area("Tuliskan Catatan/Pembaruan:")
-                
-                if st.form_submit_button("Simpan Perubahan"):
-                    waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    is_internal = 1 if "Internal" in jenis_update else 0
-                    conn.execute("UPDATE pipp SET status=?, priority=? WHERE id=?", (status_baru, priority_baru, id_laporan))
-                    if status_baru in ["Selesai", "Ditutup"]:
-                        conn.execute("UPDATE pipp SET waktu_selesai=?, solusi=? WHERE id=?", (waktu_sekarang, solusi_admin, id_laporan))
-                    conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
-                                 (id_laporan, "Admin", f"Ubah Status ke {status_baru}", solusi_admin, is_internal, waktu_sekarang))
-                    conn.commit()
-                    st.success("✅ Tiket berhasil diupdate!"); st.rerun()
-        else:
-            st.success("🎉 Luar biasa! Semua tiket sudah ditangani.")
+        try:
+            df_pending = pd.read_sql_query("SELECT id, waktu_input, status, priority, jenis_laporan, nama_pasien, keluhan FROM pipp WHERE status NOT IN ('Selesai', 'Ditutup') ORDER BY id DESC", conn)
+            if not df_pending.empty:
+                st.dataframe(df_pending, use_container_width=True)
+                with st.form("form_solusi"):
+                    st.markdown("### Update Status Tiket")
+                    c_id, c_stat, c_pri = st.columns(3)
+                    with c_id: id_laporan = st.selectbox("ID Laporan:", df_pending['id'].tolist())
+                    with c_stat: status_baru = st.selectbox("Update Status:", ["Ditinjau", "Diproses", "Menunggu Pasien", "Menunggu Unit Lain", "Selesai", "Ditutup"])
+                    with c_pri: priority_baru = st.selectbox("Priority:", ["Normal", "Penting", "Mendesak"])
+                    
+                    st.markdown("---")
+                    jenis_update = st.radio("Jenis Catatan:", ["Catatan Internal (Hanya Admin)", "Pembaruan Pasien (Bisa Dilihat Pasien di Link Status)"])
+                    solusi_admin = st.text_area("Tuliskan Catatan/Pembaruan:")
+                    
+                    if st.form_submit_button("Simpan Perubahan"):
+                        waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        is_internal = 1 if "Internal" in jenis_update else 0
+                        conn.execute("UPDATE pipp SET status=?, priority=? WHERE id=?", (status_baru, priority_baru, id_laporan))
+                        if status_baru in ["Selesai", "Ditutup"]:
+                            conn.execute("UPDATE pipp SET waktu_selesai=?, solusi=? WHERE id=?", (waktu_sekarang, solusi_admin, id_laporan))
+                        conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
+                                     (id_laporan, "Admin", f"Ubah Status ke {status_baru}", solusi_admin, is_internal, waktu_sekarang))
+                        conn.commit()
+                        st.success("✅ Tiket berhasil diupdate!"); st.rerun()
+            else:
+                st.success("🎉 Luar biasa! Semua tiket sudah ditangani.")
+        except Exception as e:
+            st.error("Sistem sedang menginisialisasi database...")
 
     with tab2:
         st.subheader("👥 Database Kontak Pasien")
@@ -154,11 +171,13 @@ else:
 
     with tab4:
         st.subheader("📑 Arsip Data & Export Excel")
-        df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
-        if not df_all.empty:
-            st.dataframe(df_all.drop(columns=['id', 'is_real', 'link_bukti', 'alamat'], errors='ignore'), use_container_width=True)
-            excel_data = create_excel(df_all, "Arsip Pasien")
-            st.download_button(label="📥 Download Data Excel", data=excel_data, file_name=f"Arsip_Pasien_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        try:
+            df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
+            if not df_all.empty:
+                st.dataframe(df_all.drop(columns=['id', 'is_real', 'link_bukti', 'alamat'], errors='ignore'), use_container_width=True)
+                excel_data = create_excel(df_all, "Arsip Pasien")
+                st.download_button(label="📥 Download Data Excel", data=excel_data, file_name=f"Arsip_Pasien_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except: st.info("Arsip kosong.")
 
     with tab5:
         st.subheader("⚙️ Database Tabel")
