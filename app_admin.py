@@ -1,47 +1,169 @@
 import streamlit as st
-from database import init_db, get_conn, PIN_ADMIN_RAHASIA
-from modul_admin.tab_dasbor import render_tab_dasbor
-from modul_admin.tab_importer import render_tab_importer
-from modul_admin.tab_input import render_tab_input
-from modul_admin.tab_form_builder import render_tab_form_builder # <--- TAMBAH INI
+import pandas as pd
+import sqlite3
+import io
+import requests
+from datetime import datetime
 
-st.set_page_config(page_title="Admin - Database Klinik", layout="wide", initial_sidebar_state="collapsed")
-init_db()
-conn = get_conn()
+# =====================================================================
+# PENGATURAN & KONEKSI
+# =====================================================================
+PIN_ADMIN_RAHASIA = "123456"
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI"
+APP_URL = "https://pipp-klinik.streamlit.app"
+DB_PATH = "klinik_pipp.db"
+
+def get_conn(): return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def create_excel(df, title):
+    output = io.BytesIO()
+    export_df = df.copy()
+    export_df.insert(0, 'No', range(1, 1 + len(export_df)))
+    if 'link_bukti' in export_df.columns:
+        export_df['Link Lampiran'] = export_df['link_bukti'].apply(lambda x: f"{APP_URL}/?file_id={x}" if pd.notna(x) and x != "-" else "Tidak ada")
+    export_df['Durasi Penanganan'] = export_df.apply(lambda row: str(pd.to_datetime(row['waktu_selesai']) - pd.to_datetime(row['waktu_input'])).split('.')[0] if pd.notna(row['waktu_selesai']) else "Selesai Instan", axis=1)
+    
+    cols = ['No', 'waktu_input', 'no_bpjs', 'nama_pasien', 'no_telp', 'keluhan', 'solusi', 'Durasi Penanganan']
+    if 'Link Lampiran' in export_df.columns: cols.append('Link Lampiran')
+    
+    export_df = export_df[cols]
+    new_names = ['No', 'Waktu Masuk', 'No Identitas (BPJS/NIK)', 'Nama Pasien', 'Kontak', 'Keluhan', 'Solusi', 'Lama Penanganan']
+    if 'Link Lampiran' in export_df.columns: new_names.append('Link Download Bukti')
+    export_df.columns = new_names
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False, sheet_name=title)
+    return output.getvalue()
+
+# =====================================================================
+# AKSES BUKTI LAMPIRAN (FILE ID VIA URL)
+# =====================================================================
+if "file_id" in st.query_params:
+    file_id = st.query_params["file_id"]
+    st.title("📥 Akses Lampiran Pasien")
+    pin = st.text_input("Masukkan PIN Keamanan Admin:", type="password")
+    if pin == PIN_ADMIN_RAHASIA:
+        with st.spinner("Mengambil file dari Telegram..."):
+            file_info_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
+            res = requests.get(file_info_url).json()
+            if res.get("ok"):
+                file_path = res["result"]["file_path"]
+                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+                file_bytes = requests.get(download_url).content
+                ext = file_path.split(".")[-1] if "." in file_path else "file"
+                st.download_button(label="⬇️ Download File Lampiran", data=file_bytes, file_name=f"Bukti_Laporan.{ext}")
+            else: st.error("Gagal! File tidak ditemukan.")
+    elif pin: st.error("PIN Salah!")
+    st.stop()
+
+# =====================================================================
+# PROGRAM UTAMA ADMIN
+# =====================================================================
+st.set_page_config(page_title="Dashboard Admin", layout="wide")
 
 st.markdown("""
 <style>
     .stApp { background-color: #f8fafc !important; font-family: 'Inter', sans-serif;}
-    .filter-chip { background-color: #e2e8f0; color: #0f172a; padding: 4px 12px; border-radius: 16px; font-size: 13px; font-weight: 600; margin-right: 8px; display: inline-block; margin-bottom: 8px;}
-    .card-detail { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-top:10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);}
-    .section-header { font-size: 18px; font-weight: 700; color: #1e293b; margin-top: 20px; margin-bottom: 10px; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px;}
+    div[data-testid="stButton"] > button { background-color: #16a34a !important; color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100% !important;}
 </style>
 """, unsafe_allow_html=True)
 
 if "admin_logged_in" not in st.session_state: st.session_state.admin_logged_in = False
 
 if not st.session_state.admin_logged_in:
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.info("🔐 Masukkan PIN Admin untuk mengakses Database.")
-        pin_input = st.text_input("PIN Keamanan:", type="password")
-        if st.button("Masuk"):
-            if pin_input == PIN_ADMIN_RAHASIA:
-                st.session_state.admin_logged_in = True; st.rerun()
-            else:
-                st.error("PIN Salah!")
+    st.info("🔐 Silakan masukkan PIN untuk mengakses Database Manajemen Klinik.")
+    pin_input = st.text_input("PIN Keamanan:", type="password")
+    if st.button("Masuk / Login"):
+        if pin_input == PIN_ADMIN_RAHASIA: st.session_state.admin_logged_in = True; st.rerun()
+        else: st.error("PIN Salah!")
 else:
+    conn = get_conn()
     c1, c2 = st.columns([4, 1])
-    with c1: st.title("🗄 Database Utama Klinik")
-    with c2: 
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚪 Logout", use_container_width=True): 
-            st.session_state.admin_logged_in = False; st.rerun()
+    with c1: st.title("📂 Dashboard Staf Klinik")
+    with c2:
+        if st.button("🚪 Logout"): st.session_state.admin_logged_in = False; st.rerun()
 
-    # EXTEND: MENAMBAHKAN TAB FORM BUILDER
-    tab_db, tab_import, tab_input, tab_builder = st.tabs(["📊 Update Penanganan (Dasbor)", "📥 Import Data", "✍ Input Pasien", "📋 Form Builder"])
+    try:
+        total_pending = pd.read_sql_query("SELECT COUNT(*) FROM pipp WHERE status IN ('Baru', 'Ditinjau', 'Diproses', 'Menunggu Pasien')", conn).iloc[0, 0]
+        total_all = pd.read_sql_query("SELECT COUNT(*) FROM pipp", conn).iloc[0, 0]
+    except:
+        total_pending, total_all = 0, 0
 
-    with tab_db: render_tab_dasbor(conn)
-    with tab_import: render_tab_importer(conn)
-    with tab_input: render_tab_input(conn)
-    with tab_builder: render_tab_form_builder(conn)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("🔴 Tiket Belum Selesai", total_pending)
+    m2.metric("🟢 Total Keseluruhan Laporan", total_all)
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔴 Antrean Tiket", "👥 Kontak & Interaksi", "✍️ Input Manual", "📑 Arsip & Excel", "⚙️ Database Form Builder"])
+
+    with tab1:
+        st.subheader("Daftar Tiket Membutuhkan Tindakan")
+        df_pending = pd.read_sql_query("SELECT id, waktu_input, status, priority, jenis_laporan, nama_pasien, keluhan FROM pipp WHERE status NOT IN ('Selesai', 'Ditutup') ORDER BY id DESC", conn)
+        if not df_pending.empty:
+            st.dataframe(df_pending, use_container_width=True)
+            with st.form("form_solusi"):
+                st.markdown("### Update Status Tiket")
+                c_id, c_stat, c_pri = st.columns(3)
+                with c_id: id_laporan = st.selectbox("ID Laporan:", df_pending['id'].tolist())
+                with c_stat: status_baru = st.selectbox("Update Status:", ["Ditinjau", "Diproses", "Menunggu Pasien", "Menunggu Unit Lain", "Selesai", "Ditutup"])
+                with c_pri: priority_baru = st.selectbox("Priority:", ["Normal", "Penting", "Mendesak"])
+                
+                st.markdown("---")
+                jenis_update = st.radio("Jenis Catatan:", ["Catatan Internal (Hanya Admin)", "Pembaruan Pasien (Bisa Dilihat Pasien di Link Status)"])
+                solusi_admin = st.text_area("Tuliskan Catatan/Pembaruan:")
+                
+                if st.form_submit_button("Simpan Perubahan"):
+                    waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    is_internal = 1 if "Internal" in jenis_update else 0
+                    conn.execute("UPDATE pipp SET status=?, priority=? WHERE id=?", (status_baru, priority_baru, id_laporan))
+                    if status_baru in ["Selesai", "Ditutup"]:
+                        conn.execute("UPDATE pipp SET waktu_selesai=?, solusi=? WHERE id=?", (waktu_sekarang, solusi_admin, id_laporan))
+                    conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
+                                 (id_laporan, "Admin", f"Ubah Status ke {status_baru}", solusi_admin, is_internal, waktu_sekarang))
+                    conn.commit()
+                    st.success("✅ Tiket berhasil diupdate!"); st.rerun()
+        else:
+            st.success("🎉 Luar biasa! Semua tiket sudah ditangani.")
+
+    with tab2:
+        st.subheader("👥 Database Kontak Pasien")
+        try:
+            df_kontak = pd.read_sql_query("SELECT id, name, whatsapp, bpjs, consent_wa, last_interaction_at FROM contacts ORDER BY last_interaction_at DESC", conn)
+            st.dataframe(df_kontak, use_container_width=True)
+        except: st.info("Belum ada data.")
+
+    with tab3:
+        st.subheader("✍️ Input Data Pasien Manual")
+        with st.form("form_manual_staf"):
+            m_nama = st.text_input("👤 Nama Pasien *")
+            col_m1, col_m2 = st.columns(2)
+            with col_m1: m_bpjs = st.text_input("🏥 Nomor BPJS (Opsional)")
+            with col_m2: m_nik = st.text_input("💳 NIK KTP (Opsional)")
+            m_jenis = st.selectbox("Kategori Laporan", ["PIPP BPJS", "Pengaduan Layanan/Fasilitas", "Layanan Medis Biasa"])
+            m_keluhan = st.text_area("💬 Detail Keluhan *")
+            m_solusi = st.text_area("✅ Solusi yang Diberikan Staf *")
+            if st.form_submit_button("Simpan ke Database"):
+                if m_nama and m_keluhan and m_solusi:
+                    identitas_m_gabungan = f"BPJS: {m_bpjs} / NIK: {m_nik}"
+                    waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, link_bukti, is_real, status)
+                                    VALUES (?,?,?,?,'-','-',?,?,?,'-',1, 'Selesai')''',
+                                 (waktu_sekarang, waktu_sekarang, identitas_m_gabungan, m_nama, m_jenis, m_keluhan, m_solusi))
+                    conn.commit(); st.success("✅ Data berhasil dimasukkan ke Database!")
+                else: st.error("Nama, Keluhan, dan Solusi wajib diisi.")
+
+    with tab4:
+        st.subheader("📑 Arsip Data & Export Excel")
+        df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
+        if not df_all.empty:
+            st.dataframe(df_all.drop(columns=['id', 'is_real', 'link_bukti', 'alamat'], errors='ignore'), use_container_width=True)
+            excel_data = create_excel(df_all, "Arsip Pasien")
+            st.download_button(label="📥 Download Data Excel", data=excel_data, file_name=f"Arsip_Pasien_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with tab5:
+        st.subheader("⚙️ Database Tabel")
+        st.info("Anda dapat memantau data mentah dari tabel pembangun formulir di sini.")
+        try:
+            df_main = pd.read_sql_query("SELECT * FROM main_categories", conn)
+            st.dataframe(df_main)
+        except: pass
