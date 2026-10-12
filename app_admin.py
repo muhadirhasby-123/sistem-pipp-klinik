@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 # =====================================================================
-# PENGATURAN & KONEKSI
+# PENGATURAN & KONEKSI (GUNAKAN DATA RAHASIA ASLI ANDA)
 # =====================================================================
 PIN_ADMIN_RAHASIA = "123456" # <-- GANTI DENGAN PIN ASLI ANDA
 TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- GANTI DENGAN TOKEN ASLI ANDA
@@ -56,7 +56,7 @@ def create_excel(df, title):
     return output.getvalue()
 
 # =====================================================================
-# AKSES BUKTI LAMPIRAN (FILE ID VIA URL) - TETAP AMAN
+# AKSES BUKTI LAMPIRAN
 # =====================================================================
 if "file_id" in st.query_params:
     file_id = st.query_params["file_id"]
@@ -81,28 +81,48 @@ if "file_id" in st.query_params:
 # =====================================================================
 st.set_page_config(page_title="Dashboard Admin Papan Mas", layout="wide", initial_sidebar_state="collapsed")
 
-# --- UI/UX CUSTOM CSS ---
+# --- UI/UX CUSTOM CSS (Desain Interaktif & Modern) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f8fafc !important; font-family: 'Inter', 'Segoe UI', sans-serif;}
+    /* Transisi lembut untuk seluruh elemen */
+    * { transition: all 0.3s ease-in-out; }
     
-    /* Styling Metrik Ringkas */
-    div[data-testid="metric-container"] {
-        background-color: #ffffff; border: 1px solid #e2e8f0; padding: 12px 15px;
-        border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    /* Tabel dengan Batas Tinggi agar tidak memanjang 1000 baris ke bawah */
+    div[data-testid="stDataFrame"] > div {
+        max-height: 400px !important; 
+        overflow-y: auto !important;
+        border-radius: 12px;
+        border: 1px solid #334155;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     }
     
-    /* Styling Input agar tidak terlalu tinggi */
-    div[data-baseweb="input"] { border-radius: 6px !important; }
+    /* Hover effect pada input form */
+    div[data-baseweb="input"]:hover, div[data-baseweb="select"]:hover {
+        border-color: #0ea5e9 !important;
+        box-shadow: 0 0 0 1px #0ea5e9 !important;
+    }
     
-    /* Tombol */
+    /* Tombol Interaktif */
     div[data-testid="stFormSubmitButton"] > button {
-        background-color: #0284c7 !important; color: white !important;
-        border-radius: 6px !important; font-weight: 600 !important; border: none !important; width: 100% !important;
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+        color: white !important;
+        border-radius: 8px !important;
+        font-weight: bold !important;
+        border: none !important;
+        width: 100% !important;
+        padding: 10px !important;
     }
-    .btn-logout > div > button {
-        background-color: transparent !important; color: #ef4444 !important;
-        border: 1px solid #ef4444 !important; border-radius: 6px !important; font-weight: 600 !important;
+    div[data-testid="stFormSubmitButton"] > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 15px rgba(2, 132, 199, 0.4);
+    }
+    
+    /* Kotak Form Detail yang elegan */
+    div[data-testid="stForm"] {
+        background-color: transparent !important;
+        border: 1px solid #334155 !important;
+        border-radius: 12px !important;
+        padding: 20px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -121,49 +141,40 @@ if not st.session_state.admin_logged_in:
 else:
     conn = get_conn()
     
-    # --- HEADER ---
-    c_head1, c_head2 = st.columns([5, 1])
+    c_head1, c_head2 = st.columns([6, 1])
     with c_head1: 
-        st.markdown("<h3 style='color: #0f172a; margin-bottom: 0px;'>🏥 Dashboard Layanan Klinik Pratama Papan Mas</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='margin-bottom: 0px;'>🏥 Dashboard Layanan Klinik Pratama Papan Mas</h3>", unsafe_allow_html=True)
     with c_head2:
-        st.markdown('<div class="btn-logout">', unsafe_allow_html=True)
-        if st.button("🚪 Keluar (Logout)", use_container_width=True): 
+        if st.button("🚪 Logout", use_container_width=True): 
             st.session_state.admin_logged_in = False
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<hr style='border-top: 1px solid #e2e8f0; margin: 10px 0px;'>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-top: 1px solid #334155; margin: 15px 0px;'>", unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🎫 Antrean & Laporan", 
-        "👥 Kontak & Interaksi", 
+        "🎫 Manajemen Laporan", 
+        "👥 Interaksi", 
         "✍️ Input Manual", 
-        "📑 Arsip & Excel", 
-        "⚙️ Form Builder"
+        "📑 Arsip Lengkap", 
+        "⚙️ Kategori"
     ])
 
-    # ---------------------------------------------------------
-    # TAB 1: MANAJEMEN ANTREAN & DATA HISTORIS
-    # ---------------------------------------------------------
     with tab1:
         try:
             df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn)
             df_all = df_all.fillna('')
             df_all['waktu_input_dt'] = pd.to_datetime(df_all['waktu_input'], errors='coerce')
             
-            # --- PANEL FILTER SIMPEL & HORIZONTAL (1 Baris Saja) ---
-            st.markdown("<p style='font-size: 14px; color: #475569; margin-bottom: -10px; font-weight: 600;'>🔍 Filter Pencarian & Kalender</p>", unsafe_allow_html=True)
-            f_col1, f_col2, f_col3 = st.columns([2, 1, 1]) # Proporsi diatur menyamping
+            # --- FILTER EKSKLUSIF & RAMPING (Hanya Nama, BPJS & Tanggal) ---
+            st.markdown("<p style='font-size: 15px; font-weight: bold; margin-bottom: 5px;'>🔍 Filter Data</p>", unsafe_allow_html=True)
+            f_col1, f_col2 = st.columns([2, 1])
             
             with f_col1:
-                search_query = st.text_input("Pencarian (Nama/BPJS/Keluhan):", placeholder="Ketik kata kunci pencarian...", label_visibility="collapsed")
+                search_query = st.text_input("Pencarian:", placeholder="Ketik Nama, Nomor BPJS/NIK, atau ID...", label_visibility="collapsed")
             with f_col2:
                 tanggal_filter = st.date_input("Rentang Tanggal:", value=(), label_visibility="collapsed")
-            with f_col3:
-                list_stat = ["Baru", "Ditinjau", "Diproses", "Menunggu Pasien", "Selesai", "Ditutup"]
-                stat_filter = st.multiselect("Status:", options=list_stat, placeholder="Semua Status...", label_visibility="collapsed")
 
-            # --- PROSES FILTER SEDERHANA ---
+            # --- PROSES FILTER DATA ---
             df_filtered = df_all.copy()
             
             if search_query:
@@ -171,7 +182,6 @@ else:
                 df_filtered = df_filtered[
                     df_filtered['id'].astype(str).str.contains(sq) |
                     df_filtered['nama_pasien'].str.lower().str.contains(sq) |
-                    df_filtered['keluhan'].str.lower().str.contains(sq) |
                     df_filtered['no_bpjs'].str.lower().str.contains(sq)
                 ]
             
@@ -180,20 +190,9 @@ else:
             elif len(tanggal_filter) == 1:
                 df_filtered = df_filtered[df_filtered['waktu_input_dt'].dt.date == tanggal_filter[0]]
                 
-            if stat_filter:
-                df_filtered = df_filtered[df_filtered['status'].isin(stat_filter)]
-
-            # --- METRIK HORIZONTAL ---
-            st.markdown("<hr style='border-top: 1px solid #f1f5f9; margin: 5px 0px 15px 0px;'>", unsafe_allow_html=True)
-            rm1, rm2, rm3, rm4 = st.columns(4)
-            rm1.metric("Total Laporan (Terfilter)", len(df_filtered))
-            rm2.metric("Kategori Belum Tercatat", len(df_filtered[(df_filtered['jenis_laporan'] == '') | (df_filtered['jenis_laporan'] == '-')]))
-            rm3.metric("Petugas Belum Tercatat", len(df_filtered[(df_filtered['petugas'] == '') | (df_filtered['petugas'] == '-')]))
-            rm4.metric("Solusi Belum Tercatat", len(df_filtered[(df_filtered['solusi'] == '') | (df_filtered['solusi'] == '-')]))
-            
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- TABEL RINGKAS ---
+            # --- TABEL RINGKAS (Tinggi Dikunci, bisa di-scroll internal) ---
             df_display = df_filtered[['id', 'waktu_input', 'no_bpjs', 'nama_pasien', 'keluhan', 'jenis_laporan', 'status']].copy()
             df_display['jenis_laporan'] = df_display['jenis_laporan'].apply(lambda x: 'Belum diklasifikasi' if x in ['', '-'] else x)
             df_display['nama_pasien'] = df_display['nama_pasien'].apply(lambda x: 'Belum tercatat' if x in ['', '-'] else x)
@@ -204,89 +203,92 @@ else:
                 'keluhan': 'Keluhan', 'jenis_laporan': 'Kategori', 'status': 'Status'
             })
             
+            # Dataframe sekarang akan otomatis memunculkan scrollbar jika lebih dari ~400px (diatur via CSS)
             st.dataframe(df_display, use_container_width=True, hide_index=True)
             
-            # --- AKSI DETAIL (DISUSUN SIDE-BY-SIDE HORIZONTAL) ---
-            st.markdown("<hr style='border-top: 1px solid #e2e8f0; margin: 20px 0px;'>", unsafe_allow_html=True)
+            # --- AKSI DETAIL LAPORAN ---
+            st.markdown("<hr style='border-top: 1px solid #334155; margin: 25px 0px;'>", unsafe_allow_html=True)
             
             sel_col1, sel_col2 = st.columns([1, 4])
             with sel_col1:
-                st.markdown("<p style='font-size: 14px; font-weight: 600; margin-top: 5px;'>Pilih ID untuk Dikelola:</p>", unsafe_allow_html=True)
+                st.markdown("<p style='font-size: 15px; font-weight: bold; margin-top: 8px;'>📝 Kelola Laporan (ID):</p>", unsafe_allow_html=True)
             with sel_col2:
-                selected_id = st.selectbox("ID Laporan", [None] + df_filtered['id'].tolist(), format_func=lambda x: f"ID {x}" if x else "--- Klik disini untuk memilih ID ---", label_visibility="collapsed")
+                selected_id = st.selectbox("ID Laporan", [None] + df_filtered['id'].tolist(), format_func=lambda x: f"Pilih ID: {x}" if x else "--- Klik di sini untuk memilih ID Laporan ---", label_visibility="collapsed")
             
             if selected_id:
                 data_terpilih = df_all[df_all['id'] == selected_id].iloc[0]
                 
-                # Menggunakan Container bergaris batas agar rapi (Tidak expander lipat ke bawah)
-                with st.container(border=True):
-                    # Susun Informasi dan Form bersebelahan (Horizontal Split)
-                    c_info, c_form = st.columns([1, 1.5], gap="large")
-                    
-                    with c_info:
-                        st.markdown(f"##### Info Pasien (ID: {selected_id})")
-                        st.write(f"**Nama:** {data_terpilih['nama_pasien'] if data_terpilih['nama_pasien'] not in ['', '-'] else '*Belum tercatat*'}")
-                        st.write(f"**Identitas:** {data_terpilih['no_bpjs'] if data_terpilih['no_bpjs'] not in ['', '-'] else '*Belum tercatat*'}")
-                        st.write(f"**Kontak:** {data_terpilih['no_telp'] if data_terpilih['no_telp'] not in ['', '-'] else '*Belum tercatat*'}")
-                        st.write(f"**Keluhan:** {data_terpilih['keluhan'] if data_terpilih['keluhan'] not in ['', '-'] else '*Belum tercatat*'}")
-                        st.write(f"**Waktu Selesai:** {data_terpilih['waktu_selesai'] if data_terpilih['waktu_selesai'] not in ['', '-'] else '*Belum selesai*'}")
-                    
-                    with c_form:
-                        st.markdown("##### Update Status & Kelengkapan")
-                        with st.form(f"form_update_{selected_id}"):
-                            # Susun form ke samping (Horizontal)
-                            fc1, fc2 = st.columns(2)
-                            with fc1:
-                                val_kat = "" if data_terpilih['jenis_laporan'] == '-' else data_terpilih['jenis_laporan']
-                                kategori_baru = st.text_input("Kategori Laporan", value=val_kat)
-                                
-                                val_petugas = "" if data_terpilih['petugas'] == '-' else data_terpilih['petugas']
-                                petugas_baru = st.text_input("Nama Petugas", value=val_petugas)
-                            with fc2:
-                                val_subkat = "" if data_terpilih['subkategori'] == '-' else data_terpilih['subkategori']
-                                subkategori_baru = st.text_input("Subkategori", value=val_subkat)
-                                
-                                status_saat_ini = data_terpilih['status']
-                                list_status = ["Baru", "Ditinjau", "Diproses", "Menunggu Pasien", "Selesai", "Ditutup"]
-                                idx_status = list_status.index(status_saat_ini) if status_saat_ini in list_status else 0
-                                status_baru = st.selectbox("Status", list_status, index=idx_status)
+                # Susun Informasi dan Form secara rapi dan profesional
+                c_info, c_form = st.columns([1, 1.5], gap="large")
+                
+                with c_info:
+                    st.markdown(f"#### Detail Pasien (ID: {selected_id})")
+                    st.markdown(f"""
+                    <div style='background-color: transparent; border-left: 4px solid #0ea5e9; padding-left: 15px; margin-top: 15px;'>
+                        <p style='margin-bottom: 5px; color: #94a3b8; font-size: 13px;'>NAMA PASIEN</p>
+                        <p style='font-weight: bold; font-size: 16px; margin-top: 0px;'>{data_terpilih['nama_pasien'] if data_terpilih['nama_pasien'] not in ['', '-'] else '*Belum tercatat*'}</p>
+                        
+                        <p style='margin-bottom: 5px; color: #94a3b8; font-size: 13px;'>IDENTITAS (BPJS/NIK)</p>
+                        <p style='font-weight: bold; font-size: 16px; margin-top: 0px;'>{data_terpilih['no_bpjs'] if data_terpilih['no_bpjs'] not in ['', '-'] else '*Belum tercatat*'}</p>
+                        
+                        <p style='margin-bottom: 5px; color: #94a3b8; font-size: 13px;'>KELUHAN AWAL</p>
+                        <p style='font-weight: normal; font-size: 15px; margin-top: 0px;'>{data_terpilih['keluhan'] if data_terpilih['keluhan'] not in ['', '-'] else '*Belum tercatat*'}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with c_form:
+                    with st.form(f"form_update_{selected_id}"):
+                        st.markdown("#### Form Tindakan")
+                        fc1, fc2 = st.columns(2)
+                        with fc1:
+                            val_kat = "" if data_terpilih['jenis_laporan'] == '-' else data_terpilih['jenis_laporan']
+                            kategori_baru = st.text_input("Kategori Utama", value=val_kat)
                             
-                            val_solusi = "" if data_terpilih['solusi'] == '-' else data_terpilih['solusi']
-                            solusi_baru = st.text_area("Tindakan / Solusi", value=val_solusi, height=68)
+                            val_petugas = "" if data_terpilih['petugas'] == '-' else data_terpilih['petugas']
+                            petugas_baru = st.text_input("Nama Petugas", value=val_petugas)
+                        with fc2:
+                            val_subkat = "" if data_terpilih['subkategori'] == '-' else data_terpilih['subkategori']
+                            subkategori_baru = st.text_input("Subkategori", value=val_subkat)
                             
-                            if st.form_submit_button("Simpan Data"):
-                                waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                waktu_selesai = data_terpilih['waktu_selesai']
-                                
-                                if status_baru in ["Selesai", "Ditutup"] and waktu_selesai == '':
-                                    waktu_selesai = waktu_sekarang
-                                
-                                conn.execute("""UPDATE pipp SET 
-                                             jenis_laporan = ?, subkategori = ?, petugas = ?, solusi = ?, status = ?, waktu_selesai = ?
-                                             WHERE id = ?""", 
-                                             (kategori_baru, subkategori_baru, petugas_baru, solusi_baru, status_baru, waktu_selesai, selected_id))
-                                
-                                log_note = f"Pembaruan administratif. Petugas: {petugas_baru if petugas_baru else 'Belum ditentukan'}."
-                                conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
-                                             (selected_id, "Admin System", f"Update Status: {status_baru}", log_note, 1, waktu_sekarang))
-                                conn.commit()
-                                st.success("✅ Tersimpan!"); st.rerun()
+                            status_saat_ini = data_terpilih['status']
+                            list_status = ["Baru", "Ditinjau", "Diproses", "Menunggu Pasien", "Selesai", "Ditutup"]
+                            idx_status = list_status.index(status_saat_ini) if status_saat_ini in list_status else 0
+                            status_baru = st.selectbox("Status", list_status, index=idx_status)
+                        
+                        val_solusi = "" if data_terpilih['solusi'] == '-' else data_terpilih['solusi']
+                        solusi_baru = st.text_area("Tindakan / Solusi yang diberikan", value=val_solusi, height=100)
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.form_submit_button("Simpan & Update Laporan"):
+                            waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            waktu_selesai = data_terpilih['waktu_selesai']
+                            
+                            if status_baru in ["Selesai", "Ditutup"] and waktu_selesai == '':
+                                waktu_selesai = waktu_sekarang
+                            
+                            conn.execute("""UPDATE pipp SET 
+                                         jenis_laporan = ?, subkategori = ?, petugas = ?, solusi = ?, status = ?, waktu_selesai = ?
+                                         WHERE id = ?""", 
+                                         (kategori_baru, subkategori_baru, petugas_baru, solusi_baru, status_baru, waktu_selesai, selected_id))
+                            
+                            conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
+                                         (selected_id, "Admin System", f"Update Status: {status_baru}", "Pembaruan data", 1, waktu_sekarang))
+                            conn.commit()
+                            st.success("✅ Laporan Berhasil Diperbarui!"); st.rerun()
 
         except Exception as e:
             st.error(f"Sistem sedang membaca database... ({e})")
 
     # ---------------------------------------------------------
-    # TAB 2 - 5: (FITUR LAMA DIPERTAHANKAN 100%)
+    # TAB 2 - 5: (TETAP AMAN)
     # ---------------------------------------------------------
     with tab2:
-        st.markdown("#### 👥 Database Kontak Pasien")
         try:
             df_kontak = pd.read_sql_query("SELECT id, name, whatsapp, bpjs, consent_wa, last_interaction_at FROM contacts ORDER BY last_interaction_at DESC", conn)
             st.dataframe(df_kontak, use_container_width=True)
         except: st.info("Belum ada data kontak terekam.")
 
     with tab3:
-        st.markdown("#### ✍️ Form Input Data Manual Staf")
         with st.form("form_manual_staf"):
             m_nama = st.text_input("👤 Nama Pasien Lengkap *")
             col_m1, col_m2 = st.columns(2)
@@ -307,7 +309,6 @@ else:
                 else: st.error("Lengkapi Nama, Keluhan, dan Solusi.")
 
     with tab4:
-        st.markdown("#### 📑 Arsip Seluruh Data & Export")
         try:
             df_arsip = pd.read_sql_query("SELECT * FROM pipp ORDER BY waktu_input DESC", conn)
             if not df_arsip.empty:
@@ -319,8 +320,6 @@ else:
         except: st.info("Belum ada arsip data.")
 
     with tab5:
-        st.markdown("#### ⚙️ Pengaturan Form Kategori")
-        st.info("Pemantauan arsitektur tabel kategori.")
         try:
             df_main = pd.read_sql_query("SELECT * FROM main_categories", conn)
             st.dataframe(df_main, use_container_width=True)
