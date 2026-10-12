@@ -8,8 +8,8 @@ from datetime import datetime
 # =====================================================================
 # PENGATURAN & KONEKSI (GUNAKAN DATA RAHASIA ASLI ANDA)
 # =====================================================================
-PIN_ADMIN_RAHASIA = "123456" # Ganti dengan PIN asli Anda
-TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # Ganti dengan Token asli Anda
+PIN_ADMIN_RAHASIA = "123456" # <-- GANTI DENGAN PIN ASLI ANDA
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- GANTI DENGAN TOKEN ASLI ANDA
 APP_URL = "https://pipp-klinik.streamlit.app"
 DB_PATH = "klinik_pipp.db"
 
@@ -25,16 +25,13 @@ def init_db():
     conn.commit()
 
 def upgrade_db():
-    # Migrasi Aman: Hanya menambah kolom, tidak menghapus/mengubah data lama
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(pipp)")
     columns = [info[1] for info in cursor.fetchall()]
     
-    if 'petugas' not in columns:
-        cursor.execute("ALTER TABLE pipp ADD COLUMN petugas TEXT DEFAULT ''")
-    if 'subkategori' not in columns:
-        cursor.execute("ALTER TABLE pipp ADD COLUMN subkategori TEXT DEFAULT ''")
+    if 'petugas' not in columns: cursor.execute("ALTER TABLE pipp ADD COLUMN petugas TEXT DEFAULT ''")
+    if 'subkategori' not in columns: cursor.execute("ALTER TABLE pipp ADD COLUMN subkategori TEXT DEFAULT ''")
     conn.commit()
 
 init_db()
@@ -46,12 +43,11 @@ def create_excel(df, title):
     export_df.insert(0, 'No', range(1, 1 + len(export_df)))
     if 'link_bukti' in export_df.columns:
         export_df['Link Lampiran'] = export_df['link_bukti'].apply(lambda x: f"{APP_URL}/?file_id={x}" if pd.notna(x) and x != "-" else "Tidak ada")
-    export_df['Durasi Penanganan'] = export_df.apply(lambda row: str(pd.to_datetime(row['waktu_selesai']) - pd.to_datetime(row['waktu_input'])).split('.')[0] if pd.notna(row['waktu_selesai']) else "Belum Selesai", axis=1)
+    export_df['Durasi Penanganan'] = export_df.apply(lambda row: str(pd.to_datetime(row['waktu_selesai']) - pd.to_datetime(row['waktu_input'])).split('.')[0] if pd.notna(row['waktu_selesai']) and row['waktu_selesai'] != '' else "Belum Selesai", axis=1)
     
     cols = ['No', 'waktu_input', 'no_bpjs', 'nama_pasien', 'no_telp', 'jenis_laporan', 'subkategori', 'keluhan', 'solusi', 'petugas', 'status', 'Durasi Penanganan']
     if 'Link Lampiran' in export_df.columns: cols.append('Link Lampiran')
     
-    # Filter only columns that exist to prevent errors during export
     cols_exist = [c for c in cols if c in export_df.columns]
     export_df = export_df[cols_exist]
     
@@ -101,6 +97,7 @@ st.markdown("""
         background-color: transparent !important; color: #ef4444 !important;
         border: 1px solid #ef4444 !important; border-radius: 8px !important; font-weight: 600 !important;
     }
+    .filter-box { background-color: #ffffff; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,7 +128,6 @@ else:
 
     st.markdown("<hr style='border-top: 1px solid #e2e8f0; margin: 10px 0px;'>", unsafe_allow_html=True)
 
-    # --- NAVIGASI TAB UTAMA ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🎫 Antrean & Laporan", 
         "👥 Kontak & Interaksi", 
@@ -141,50 +137,114 @@ else:
     ])
 
     # ---------------------------------------------------------
-    # TAB 1: MANAJEMEN ANTREAN & DATA HISTORIS
+    # TAB 1: MANAJEMEN ANTREAN & DATA HISTORIS (DENGAN FILTER)
     # ---------------------------------------------------------
     with tab1:
         try:
-            # Ambil semua data dan bersihkan NULL menjadi empty string agar mudah diproses
+            # Ambil semua data
             df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn)
             df_all = df_all.fillna('')
+            df_all['waktu_input_dt'] = pd.to_datetime(df_all['waktu_input'], errors='coerce')
             
-            # Perhitungan Metrik Historis
-            total_laporan = len(df_all)
-            blm_klasifikasi = len(df_all[(df_all['jenis_laporan'] == '') | (df_all['jenis_laporan'] == '-')])
-            blm_petugas = len(df_all[(df_all['petugas'] == '') | (df_all['petugas'] == '-')])
-            blm_solusi = len(df_all[(df_all['solusi'] == '') | (df_all['solusi'] == '-')])
+            # --- PANEL MULTI-FILTER & KALENDER ---
+            with st.expander("🔍 Filter & Pencarian Canggih", expanded=True):
+                f_col1, f_col2, f_col3 = st.columns(3)
+                with f_col1:
+                    search_query = st.text_input("Pencarian Teks (Nama/BPJS/Keluhan/ID):", placeholder="Ketik kata kunci...")
+                    tanggal_filter = st.date_input("🗓️ Rentang Tanggal (Kalender):", value=(), help="Pilih rentang tanggal atau 1 hari spesifik")
+                with f_col2:
+                    list_kat = [k if k not in ['', '-'] else 'Belum diklasifikasi' for k in df_all['jenis_laporan'].unique()]
+                    kat_filter = st.multiselect("Kategori Laporan:", options=list(set(list_kat)))
+                    
+                    list_stat = df_all['status'].unique().tolist()
+                    stat_filter = st.multiselect("Status Penanganan:", options=list_stat)
+                with f_col3:
+                    list_pet = [p if p not in ['', '-'] else 'Belum tercatat' for p in df_all['petugas'].unique()]
+                    pet_filter = st.multiselect("Nama Petugas:", options=list(set(list_pet)))
+                    
+                    solusi_filter = st.radio("Kelengkapan Solusi:", ["Semua", "Hanya yang Belum Tercatat", "Sudah Tercatat"])
+
+            # --- PROSES FILTER DATA ---
+            df_filtered = df_all.copy()
             
-            st.markdown("##### 📊 Ringkasan Kelengkapan Data")
+            # Filter Teks
+            if search_query:
+                sq = search_query.lower()
+                df_filtered = df_filtered[
+                    df_filtered['id'].astype(str).str.contains(sq) |
+                    df_filtered['nama_pasien'].str.lower().str.contains(sq) |
+                    df_filtered['keluhan'].str.lower().str.contains(sq) |
+                    df_filtered['no_bpjs'].str.lower().str.contains(sq)
+                ]
+            
+            # Filter Tanggal (Kalender)
+            if len(tanggal_filter) == 2:
+                df_filtered = df_filtered[(df_filtered['waktu_input_dt'].dt.date >= tanggal_filter[0]) & (df_filtered['waktu_input_dt'].dt.date <= tanggal_filter[1])]
+            elif len(tanggal_filter) == 1:
+                df_filtered = df_filtered[df_filtered['waktu_input_dt'].dt.date == tanggal_filter[0]]
+                
+            # Filter Multi-select
+            if kat_filter:
+                kondisi_kat = df_filtered['jenis_laporan'].isin(kat_filter)
+                if 'Belum diklasifikasi' in kat_filter:
+                    kondisi_kat = kondisi_kat | df_filtered['jenis_laporan'].isin(['', '-'])
+                df_filtered = df_filtered[kondisi_kat]
+                
+            if stat_filter:
+                df_filtered = df_filtered[df_filtered['status'].isin(stat_filter)]
+                
+            if pet_filter:
+                kondisi_pet = df_filtered['petugas'].isin(pet_filter)
+                if 'Belum tercatat' in pet_filter:
+                    kondisi_pet = kondisi_pet | df_filtered['petugas'].isin(['', '-'])
+                df_filtered = df_filtered[kondisi_pet]
+                
+            # Filter Solusi
+            if solusi_filter == "Hanya yang Belum Tercatat":
+                df_filtered = df_filtered[df_filtered['solusi'].isin(['', '-'])]
+            elif solusi_filter == "Sudah Tercatat":
+                df_filtered = df_filtered[~df_filtered['solusi'].isin(['', '-'])]
+
+            # --- METRIK DATA (Berdasarkan Hasil Filter) ---
+            st.markdown("##### 📊 Ringkasan Kelengkapan Data (Sesuai Filter)")
+            total_laporan = len(df_filtered)
+            blm_klasifikasi = len(df_filtered[(df_filtered['jenis_laporan'] == '') | (df_filtered['jenis_laporan'] == '-')])
+            blm_petugas = len(df_filtered[(df_filtered['petugas'] == '') | (df_filtered['petugas'] == '-')])
+            blm_solusi = len(df_filtered[(df_filtered['solusi'] == '') | (df_filtered['solusi'] == '-')])
+            
             rm1, rm2, rm3, rm4 = st.columns(4)
-            rm1.metric("Total Laporan", total_laporan)
+            rm1.metric("Total Laporan (Sesuai Filter)", total_laporan)
             rm2.metric("Kategori Blm Tercatat", blm_klasifikasi)
             rm3.metric("Petugas Blm Tercatat", blm_petugas)
             rm4.metric("Solusi Blm Tercatat", blm_solusi)
             
-            st.markdown("<br>##### 📋 Tabel Antrean Ringkas", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("##### 📋 Tabel Laporan Pasien")
             
-            # Menyiapkan Tabel Display (Hanya Kolom Esensial)
-            df_display = df_all[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'jenis_laporan', 'status']].copy()
+            # --- TABEL DATA ---
+            # Mengembalikan No. BPJS ke dalam tabel ringkas sesuai instruksi
+            df_display = df_filtered[['id', 'waktu_input', 'no_bpjs', 'nama_pasien', 'keluhan', 'jenis_laporan', 'status']].copy()
             df_display['jenis_laporan'] = df_display['jenis_laporan'].apply(lambda x: 'Belum diklasifikasi' if x in ['', '-'] else x)
             df_display['nama_pasien'] = df_display['nama_pasien'].apply(lambda x: 'Belum tercatat' if x in ['', '-'] else x)
+            df_display['no_bpjs'] = df_display['no_bpjs'].apply(lambda x: 'Belum tercatat' if x in ['', '-'] else x)
             
             df_display = df_display.rename(columns={
-                'id': 'ID', 'waktu_input': 'Tanggal Input', 'nama_pasien': 'Nama Pasien',
+                'id': 'ID', 'waktu_input': 'Tanggal Input', 'no_bpjs': 'No. Identitas', 'nama_pasien': 'Nama Pasien',
                 'keluhan': 'Keluhan', 'jenis_laporan': 'Kategori', 'status': 'Status Penanganan'
             })
             
             st.dataframe(df_display, use_container_width=True, hide_index=True)
             
-            # AKSI DETAIL & UPDATE LAPORAN
+            # --- AKSI DETAIL & UPDATE ---
             st.markdown("<br>##### 🔎 Buka Detail & Kelola Laporan", unsafe_allow_html=True)
-            selected_id = st.selectbox("Pilih ID Laporan untuk dikelola:", [None] + df_all['id'].tolist(), format_func=lambda x: f"ID: {x}" if x else "--- Pilih ID Laporan ---")
+            # Dropdown ID hanya menampilkan ID dari data yang sudah difilter
+            selected_id = st.selectbox("Pilih ID Laporan untuk dikelola:", [None] + df_filtered['id'].tolist(), format_func=lambda x: f"ID: {x}" if x else "--- Pilih ID Laporan ---")
             
             if selected_id:
                 data_terpilih = df_all[df_all['id'] == selected_id].iloc[0]
                 
                 with st.expander(f"Detail Administrasi ID: {selected_id} (Klik untuk menutup/membuka)", expanded=True):
-                    # Info Pasien Dasar
+                    # Info Dasar
                     st.write(f"**Nama Pasien:** {data_terpilih['nama_pasien'] if data_terpilih['nama_pasien'] not in ['', '-'] else '*Belum tercatat*'}")
                     st.write(f"**No Identitas (BPJS/NIK):** {data_terpilih['no_bpjs'] if data_terpilih['no_bpjs'] not in ['', '-'] else '*Belum tercatat*'}")
                     st.write(f"**Kontak/WA:** {data_terpilih['no_telp'] if data_terpilih['no_telp'] not in ['', '-'] else '*Belum tercatat*'}")
@@ -206,7 +266,7 @@ else:
                         petugas_baru = st.text_input("Nama Petugas / Dokter Penindak", value=val_petugas)
                         
                         val_solusi = "" if data_terpilih['solusi'] == '-' else data_terpilih['solusi']
-                        solusi_baru = st.text_area("Tindakan / Solusi Medis (Biarkan kosong jika belum ada solusi)", value=val_solusi)
+                        solusi_baru = st.text_area("Tindakan / Solusi Medis (Biarkan kosong jika belum ada)", value=val_solusi)
                         
                         status_saat_ini = data_terpilih['status']
                         list_status = ["Baru", "Ditinjau", "Diproses", "Menunggu Pasien", "Selesai", "Ditutup"]
@@ -217,7 +277,6 @@ else:
                             waktu_sekarang = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             waktu_selesai = data_terpilih['waktu_selesai']
                             
-                            # Logika Waktu Selesai: Jika status berubah ke selesai dan waktu_selesai sebelumnya kosong
                             if status_baru in ["Selesai", "Ditutup"] and waktu_selesai == '':
                                 waktu_selesai = waktu_sekarang
                             
@@ -226,17 +285,17 @@ else:
                                          WHERE id = ?""", 
                                          (kategori_baru, subkategori_baru, petugas_baru, solusi_baru, status_baru, waktu_selesai, selected_id))
                             
-                            log_note = f"Pembaruan administratif. Petugas ditugaskan: {petugas_baru if petugas_baru else 'Belum ditentukan'}."
+                            log_note = f"Pembaruan administratif. Petugas: {petugas_baru if petugas_baru else 'Belum ditentukan'}."
                             conn.execute("INSERT INTO ticket_logs (ticket_id, actor, action, note, is_internal, created_at) VALUES (?,?,?,?,?,?)",
                                          (selected_id, "Admin System", f"Update Status: {status_baru}", log_note, 1, waktu_sekarang))
                             conn.commit()
-                            st.success("✅ Data dan status berhasil diperbarui dengan aman!"); st.rerun()
+                            st.success("✅ Data dan status berhasil diperbarui!"); st.rerun()
 
         except Exception as e:
             st.error(f"Sistem sedang membaca database... ({e})")
 
     # ---------------------------------------------------------
-    # TAB 2: KONTAK & INTERAKSI (FITUR LAMA DIPERTAHANKAN)
+    # TAB 2 - 5: (FITUR LAMA DIPERTAHANKAN 100%)
     # ---------------------------------------------------------
     with tab2:
         st.markdown("#### 👥 Database Kontak Pasien")
@@ -245,9 +304,6 @@ else:
             st.dataframe(df_kontak, use_container_width=True)
         except: st.info("Belum ada data kontak terekam.")
 
-    # ---------------------------------------------------------
-    # TAB 3: INPUT MANUAL (FITUR LAMA DIPERTAHANKAN)
-    # ---------------------------------------------------------
     with tab3:
         st.markdown("#### ✍️ Form Input Data Manual Staf")
         with st.form("form_manual_staf"):
@@ -269,9 +325,6 @@ else:
                     conn.commit(); st.success("✅ Data berhasil ditambahkan!")
                 else: st.error("Lengkapi Nama, Keluhan, dan Solusi.")
 
-    # ---------------------------------------------------------
-    # TAB 4: ARSIP & EXCEL (FITUR LAMA DIPERTAHANKAN & UPDATE)
-    # ---------------------------------------------------------
     with tab4:
         st.markdown("#### 📑 Arsip Seluruh Data & Export")
         try:
@@ -284,9 +337,6 @@ else:
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except: st.info("Belum ada arsip data.")
 
-    # ---------------------------------------------------------
-    # TAB 5: FORM BUILDER (FITUR LAMA DIPERTAHANKAN)
-    # ---------------------------------------------------------
     with tab5:
         st.markdown("#### ⚙️ Pengaturan Form Kategori")
         st.info("Pemantauan arsitektur tabel kategori.")
