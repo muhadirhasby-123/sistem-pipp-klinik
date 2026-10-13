@@ -3,3 +3,4 @@ pandas
 openpyxl
 requests
 pillow
+plotly==5.20.0
