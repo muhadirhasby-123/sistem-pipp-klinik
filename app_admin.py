@@ -11,10 +11,9 @@ from openpyxl.utils import get_column_letter
 # Import library untuk Word dan PDF
 try:
     from docx import Document
-    from docx.shared import Pt
     from fpdf import FPDF
 except ImportError:
-    pass # Akan di-handle oleh st.warning di UI jika belum terinstall
+    pass
 
 # =====================================================================
 # PENGATURAN & KONEKSI
@@ -42,31 +41,24 @@ def upgrade_db():
     cursor.execute("PRAGMA table_info(pipp)")
     columns = [info[1] for info in cursor.fetchall()]
     
-    if 'petugas' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN petugas TEXT DEFAULT ''")
-    if 'subkategori' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN subkategori TEXT DEFAULT ''")
-    if 'is_audited' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN is_audited INTEGER DEFAULT 0")
-    if 'jenis_pasien' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN jenis_pasien TEXT DEFAULT 'Umum'")
-    if 'tensi' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN tensi TEXT DEFAULT ''")
-    if 'suhu' not in columns: 
-        cursor.execute("ALTER TABLE pipp ADD COLUMN suhu TEXT DEFAULT ''")
+    if 'petugas' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN petugas TEXT DEFAULT ''")
+    if 'subkategori' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN subkategori TEXT DEFAULT ''")
+    if 'is_audited' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN is_audited INTEGER DEFAULT 0")
+    if 'jenis_pasien' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN jenis_pasien TEXT DEFAULT 'Umum'")
+    if 'tensi' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN tensi TEXT DEFAULT ''")
+    if 'suhu' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN suhu TEXT DEFAULT ''")
     conn.commit()
 
 init_db()
 upgrade_db()
 
-# --- FUNGSI MEMBERSIHKAN TEKS JELEK ---
 def clean_text(text):
     if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']:
         return '-'
     return str(text)
 
 # =====================================================================
-# FUNGSI EXPORT (EXCEL, WORD, PDF) PROFESIONAL
+# FUNGSI EXPORT (PERBAIKAN MUTLAK ERROR FLOAT EXCEL)
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -81,7 +73,9 @@ def style_excel_sheet(worksheet, dataframe):
         cell.border = thin_border
         
         column_letter = get_column_letter(col_num)
-        column_length = max(dataframe[column_title].astype(str).apply(lambda x: len(x) if x != 'nan' else 0).max(), len(str(column_title)))
+        # PERBAIKAN: Memaksa semua nilai menjadi string terlebih dahulu sebelum dihitung len-nya
+        # Ini mencegah error 'float has no len()' 100%
+        column_length = max(dataframe[column_title].astype(str).map(len).max(), len(str(column_title)))
         worksheet.column_dimensions[column_letter].width = min(column_length + 2, 45)
 
     for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
@@ -108,7 +102,9 @@ def prepare_export_df(df, cols_to_export):
 
 def create_excel(df, title):
     output = io.BytesIO()
+    # PERBAIKAN: Mengkonversi seluruh DataFrame menjadi tipe string MURNI sebelum dikirim ke openpyxl
     export_df = df.copy().astype(str).replace('nan', '')
+    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df.to_excel(writer, index=False, sheet_name=title)
         style_excel_sheet(writer.sheets[title], export_df)
@@ -165,6 +161,7 @@ def create_template_excel():
     output = io.BytesIO()
     df_template = pd.DataFrame(columns=['Tanggal Laporan', 'Nama Pasien', 'No. Identitas (BPJS/NIK)', 'No. WhatsApp/HP', 'Keluhan Awal', 'Kategori', 'Tindakan / Solusi', 'Nama Petugas', 'Status'])
     df_template.loc[0] = ['2026-12-01 10:00:00', 'Contoh Nama', '000123456', '081234567', 'Contoh masalah...', 'Masalah Aplikasi', 'Sudah dibantu reset', 'Dr. Budi', 'Selesai']
+    df_template = df_template.astype(str) # Paksa string
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_template.to_excel(writer, index=False, sheet_name='Template_Upload')
         style_excel_sheet(writer.sheets['Template_Upload'], df_template)
@@ -194,22 +191,13 @@ if "file_id" in st.query_params:
     st.stop()
 
 # =====================================================================
-# PROGRAM UTAMA ADMIN (DENGAN UI/UX MODERN)
+# PROGRAM UTAMA ADMIN
 # =====================================================================
 st.set_page_config(page_title="Dashboard Admin", layout="wide", initial_sidebar_state="collapsed")
 
-# --- UI/UX CUSTOM CSS (Desain Hidup, Modern, Animasi) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f1f5f9 !important; font-family: 'Inter', 'Segoe UI', sans-serif;}
-    
-    .dashboard-header {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 20px; border-radius: 12px; color: white; margin-bottom: 20px;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        display: flex; justify-content: space-between; align-items: center;
-    }
-    
+    .stApp { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     .custom-table { width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
     .custom-table th { background-color: #0f172a; color: white; padding: 12px; text-align: left; font-size: 14px; font-weight: 600; }
     .custom-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; color: #334155; }
@@ -220,69 +208,41 @@ st.markdown("""
     .badge-proses { background-color: #eff6ff; color: #3b82f6; border: 1px solid #93c5fd; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 12px; }
     
     .form-container { background: white; padding: 20px; border-radius: 12px; border-top: 4px solid #0ea5e9; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); margin-top: -10px; }
-    
-    div[data-testid="stDataFrame"] > div { max-height: 500px !important; overflow-y: auto !important; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); background-color: white; }
-    
-    div[data-testid="stFormSubmitButton"] > button {
-        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%) !important; color: white !important; border-radius: 8px !important; width: 100% !important; font-weight: 700 !important; transition: all 0.3s ease !important; border: none !important;
-    }
-    div[data-testid="stFormSubmitButton"] > button:hover { box-shadow: 0 8px 15px rgba(2, 132, 199, 0.4) !important; transform: translateY(-2px) !important; }
+    div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
+    div[data-testid="stFormSubmitButton"] > button:hover { background: #0284c7 !important; transform: scale(1.02); }
 </style>
 """, unsafe_allow_html=True)
 
-if "admin_logged_in" not in st.session_state: 
-    st.session_state.admin_logged_in = False
+if "admin_logged_in" not in st.session_state: st.session_state.admin_logged_in = False
 
 if not st.session_state.admin_logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("<br><br><br>", unsafe_allow_html=True)
-        st.info("🔐 Silakan masukkan PIN untuk mengakses Database.")
-        pin_input = st.text_input("PIN Keamanan:", type="password")
-        if st.button("Masuk / Login", type="primary"):
-            if pin_input == PIN_ADMIN_RAHASIA: 
-                st.session_state.admin_logged_in = True
-                st.rerun()
-            else: 
-                st.error("PIN Salah!")
+        st.info("🔐 Akses Manajemen Klinik")
+        if st.button("Masuk"): 
+            if st.text_input("PIN", type="password") == PIN_ADMIN_RAHASIA: st.session_state.admin_logged_in = True; st.rerun()
 else:
     conn = get_conn()
     
-    # --- HEADER MODERN ---
-    st.markdown("""
-        <div class="dashboard-header">
-            <div>
-                <h2 style='margin: 0; color: white;'>🏥 Dashboard Layanan Papan Mas</h2>
-                <p style='margin: 0; color: #94a3b8;'>Pusat Kendali Data Pasien & Analitik</p>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown("<h2 style='color:#0f172a; margin-top: -20px;'>🏥 Dashboard Klinik Pratama Papan Mas</h2>", unsafe_allow_html=True)
     
-    if st.button("🚪 Logout App", use_container_width=False): 
-        st.session_state.admin_logged_in = False
-        st.rerun()
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # SEMUA TAB DIKEMBALIKAN UTUH!
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🚀 Kelola Pasien", 
         "📝 Audit Logbook", 
         "📑 Generator Laporan", 
-        "📊 Analitik", 
-        "✍️ Input Manual",
+        "📊 Visual Analitik", 
+        "✍️ Input Data Baru",
         "📂 Manajemen Excel",
         "👥 Interaksi & Kategori"
     ])
 
-    # ---------------------------------------------------------
-    # TAB 1: PENCARIAN CERDAS & UPDATE (FORM PADAT 3 KOLOM)
-    # ---------------------------------------------------------
+    # =========================================================
+    # TAB 1: PENCARIAN & UPDATE
+    # =========================================================
     with tab1:
         df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
         
-        # SMART SEARCH DI ATAS
-        cari_pasien = st.text_input("🔍 Cari Pasien untuk Diupdate (Ketik Nama, No. BPJS/NIK, atau ID):", placeholder="Contoh: Hasnadi atau 00004051...", key="search_main")
+        cari_pasien = st.text_input("🔍 Cari Pasien untuk Diupdate (Ketik Nama, No. BPJS, atau ID):", placeholder="Contoh: Hasnadi atau 00004051...", key="search_main")
         
         if cari_pasien:
             sq = cari_pasien.lower()
@@ -290,26 +250,22 @@ else:
             
             if not hasil.empty:
                 st.success(f"Ditemukan {len(hasil)} pasien. Silakan lengkapi datanya di bawah ini:")
-                p = hasil.iloc[0] # Ambil yang pertama
+                p = hasil.iloc[0]
                 
-                # FORM UPDATE SANGAT PADAT (3 KOLOM BERJEJER)
                 st.markdown("<div class='form-container'>", unsafe_allow_html=True)
                 with st.form(f"form_update_{p['id']}"):
                     st.markdown(f"**Mengelola Pasien: {p['nama_pasien']} (ID: {p['id']})**")
                     
-                    # Baris 1
                     c1, c2, c3 = st.columns(3)
                     with c1: n_nama = st.text_input("Nama Pasien", value=clean_text(p['nama_pasien']) if clean_text(p['nama_pasien']) != '-' else '')
                     with c2: n_bpjs = st.text_input("No. BPJS / NIK", value=clean_text(p['no_bpjs']) if clean_text(p['no_bpjs']) != '-' else '')
                     with c3: n_wa = st.text_input("No. WhatsApp/HP", value=clean_text(p['no_telp']) if clean_text(p['no_telp']) != '-' else '')
                     
-                    # Baris 2
                     c4, c5, c6 = st.columns(3)
                     with c4: n_tensi = st.text_input("Tensi Darah (mmHg)", value=clean_text(p.get('tensi', '')) if clean_text(p.get('tensi', '')) != '-' else '')
                     with c5: n_suhu = st.text_input("Suhu Badan (°C)", value=clean_text(p.get('suhu', '')) if clean_text(p.get('suhu', '')) != '-' else '')
                     with c6: n_jns = st.selectbox("Jenis Pasien", ["Umum", "BPJS", "Asuransi Lain", "VIP"], index=["Umum", "BPJS", "Asuransi Lain", "VIP"].index(p.get('jenis_pasien', 'Umum')) if p.get('jenis_pasien', 'Umum') in ["Umum", "BPJS", "Asuransi Lain", "VIP"] else 0)
                     
-                    # Baris 3
                     c7, c8, c9 = st.columns(3)
                     with c7: n_kat = st.text_input("Kategori", value=clean_text(p['jenis_laporan']) if clean_text(p['jenis_laporan']) != '-' else '')
                     with c8: n_petugas = st.text_input("Petugas/Dokter", value=clean_text(p['petugas']) if clean_text(p['petugas']) != '-' else '')
@@ -328,16 +284,11 @@ else:
                                      nama_pasien=?, no_bpjs=?, no_telp=?, jenis_pasien=?, tensi=?, suhu=?,
                                      jenis_laporan=?, petugas=?, solusi=?, status=?, waktu_selesai=? WHERE id=?""", 
                                      (n_nama, n_bpjs, n_wa, n_jns, n_tensi, n_suhu, n_kat, n_petugas, n_solusi, n_stat, w_sls, p['id']))
-                        conn.commit()
-                        st.success("✅ Data tersimpan!")
-                        st.rerun()
+                        conn.commit(); st.rerun()
                 st.markdown("</div><br>", unsafe_allow_html=True)
-            else:
-                st.warning("⚠️ Pasien tidak ditemukan.")
 
-        # TABEL CUSTOM HTML (Bersih, Rapi, Ada Badge Warna)
-        st.markdown("**Data Terkini (Preview):**")
-        df_view = df_all.head(20) 
+        st.markdown("**Data Terkini (Preview 15 Teratas):**")
+        df_view = df_all.head(15) 
         
         html_table = "<table class='custom-table'><thead><tr><th>ID</th><th>Tgl Input</th><th>No. BPJS/NIK</th><th>Nama Pasien</th><th>Keluhan Awal</th><th>Petugas</th><th>Status</th></tr></thead><tbody>"
         for _, r in df_view.iterrows():
@@ -347,12 +298,12 @@ else:
         html_table += "</tbody></table>"
         st.markdown(html_table, unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
+    # =========================================================
     # TAB 2: AUDIT LOGBOOK (CENTANG LANGSUNG DI TABEL)
-    # ---------------------------------------------------------
+    # =========================================================
     with tab2:
         st.markdown("<h4 style='color:#0f172a;'>📝 Validasi Logbook 1-Klik</h4>", unsafe_allow_html=True)
-        st.info("Cukup centang kotak 'Tandai Valid' di tabel bawah jika data sudah sesuai dengan logbook fisik. Tidak perlu dropdown/form tambahan!")
+        st.info("Cukup centang kotak 'Tandai Valid' di tabel bawah jika data sudah sesuai dengan logbook fisik.")
         
         df_audit = pd.read_sql_query("SELECT id, waktu_input, no_bpjs, nama_pasien, keluhan, status, is_audited FROM pipp ORDER BY id DESC", conn)
         
@@ -369,7 +320,7 @@ else:
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Tandai Valid": st.column_config.CheckboxColumn("✔ Validasi", help="Centang jika sesuai buku manual"),
+                "Tandai Valid": st.column_config.CheckboxColumn("✔ Validasi Logbook", help="Centang jika data sudah sesuai dengan buku manual"),
                 "id": st.column_config.NumberColumn("ID", disabled=True),
                 "waktu_input": st.column_config.TextColumn("Tanggal", disabled=True),
                 "no_bpjs": st.column_config.TextColumn("No. BPJS/NIK", disabled=True),
@@ -379,19 +330,19 @@ else:
             }
         )
         
-        if st.button("💾 Simpan Semua Centang", type="primary"):
+        if st.button("💾 Simpan Semua Perubahan Centang", type="primary"):
             for index, row in edited_df.iterrows():
                 val_num = 1 if row['Tandai Valid'] else 0
                 conn.execute("UPDATE pipp SET is_audited = ? WHERE id = ?", (val_num, row['id']))
             conn.commit()
-            st.success("Validasi berhasil disimpan!")
+            st.success("Validasi berhasil disimpan masal!")
 
-    # ---------------------------------------------------------
-    # TAB 3: GENERATOR EKSPOR SPESIFIK (FILTER LENGKAP)
-    # ---------------------------------------------------------
+    # =========================================================
+    # TAB 3: GENERATOR EKSPOR (Filter Melimpah & Fleksibel)
+    # =========================================================
     with tab3:
         st.markdown("<h4 style='color:#0f172a;'>📑 Generator Laporan Fleksibel</h4>", unsafe_allow_html=True)
-        st.info("Filter data secara spesifik sebelum mengekspor laporan menjadi Excel, Word, atau PDF.")
+        st.info("Filter data secara spesifik sebelum men-generate laporan.")
         
         df_eks = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
         df_eks['waktu_input_dt'] = pd.to_datetime(df_eks['waktu_input'], errors='coerce')
@@ -420,18 +371,17 @@ else:
         
         st.markdown("---")
         dl1, dl2, dl3 = st.columns(3)
-        nm_file = f"Laporan_{datetime.now().strftime('%Y%m%d')}"
-        
-        with dl1: st.download_button("📊 Download Excel (.xlsx)", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", type="primary", use_container_width=True)
+        nm_file = f"Laporan_Spesifik_{datetime.now().strftime('%Y%m%d')}"
+        with dl1: st.download_button("📊 Export Excel (.xlsx)", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", type="primary", use_container_width=True)
         with dl2:
-            try: st.download_button("📝 Download Word (.docx)", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", type="primary", use_container_width=True)
+            try: st.download_button("📝 Export Word (.docx)", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", type="primary", use_container_width=True)
             except: st.error("Install python-docx")
         with dl3:
-            try: st.download_button("📄 Download PDF (.pdf)", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", type="primary", use_container_width=True)
+            try: st.download_button("📄 Export PDF (.pdf)", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", type="primary", use_container_width=True)
             except: st.error("Install fpdf2")
 
     # ---------------------------------------------------------
-    # TAB 4: ANALITIK 
+    # TAB 4: ANALITIK (GRAFIK PROFESIONAL)
     # ---------------------------------------------------------
     with tab4:
         tampilkan_grafik = st.toggle("Aktifkan Grafik (ON/OFF)", value=True)
@@ -446,6 +396,7 @@ else:
                         sc.columns = ['Status', 'Jumlah']
                         fig1 = px.pie(sc, values='Jumlah', names='Status', hole=0.5, color_discrete_sequence=['#0ea5e9', '#3b82f6', '#f59e0b', '#10b981'])
                         fig1.update_layout(**layout_style, showlegend=False)
+                        fig1.update_traces(textinfo='percent+label')
                         st.plotly_chart(fig1, use_container_width=True)
                 with c_graf2:
                     with st.container(border=True):
@@ -459,7 +410,7 @@ else:
             except: st.warning("Pastikan `plotly` terinstal.")
 
     # ---------------------------------------------------------
-    # TAB 5: INPUT MANUAL STAF
+    # TAB 5: INPUT MANUAL PASIEN BARU
     # ---------------------------------------------------------
     with tab5:
         with st.form("form_manual_staf"):
@@ -493,11 +444,15 @@ else:
         c_ex1, c_ex2 = st.columns(2)
         
         with c_ex1:
-            st.markdown("##### 📤 Ekspor (Download) Data Sistem")
+            st.markdown("##### 📤 Ekspor Keseluruhan Data Sistem")
             st.info("Unduh seluruh laporan pasien ke format Excel dengan tabel rapi.")
             try:
+                # PERBAIKAN: Melempar dataframe ke fungsi prepare_export_df agar kolomnya rapi dan sesuai bahasa
                 df_arsip = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn)
-                excel_file = create_excel(df_arsip, "Data_Klinik")
+                cols_to_export = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
+                df_arsip_rapi = prepare_export_df(df_arsip, cols_to_export)
+                
+                excel_file = create_excel(df_arsip_rapi, "Arsip_Klinik")
                 st.download_button("⬇️ Download Excel Sekarang", excel_file, f"Arsip_Klinik_{datetime.now().strftime('%Y%m%d')}.xlsx", type="primary", use_container_width=True)
             except Exception as e: st.error(f"Gagal memproses file: {e}")
             
