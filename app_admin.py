@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import io
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.express as px
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
@@ -58,7 +58,7 @@ def clean_text(text):
     return str(text)
 
 # =====================================================================
-# FUNGSI EXPORT (PERBAIKAN MUTLAK ERROR FLOAT EXCEL)
+# FUNGSI EXPORT (KEBAL ERROR FLOAT)
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -73,8 +73,6 @@ def style_excel_sheet(worksheet, dataframe):
         cell.border = thin_border
         
         column_letter = get_column_letter(col_num)
-        # PERBAIKAN: Memaksa semua nilai menjadi string terlebih dahulu sebelum dihitung len-nya
-        # Ini mencegah error 'float has no len()' 100%
         column_length = max(dataframe[column_title].astype(str).map(len).max(), len(str(column_title)))
         worksheet.column_dimensions[column_letter].width = min(column_length + 2, 45)
 
@@ -102,9 +100,7 @@ def prepare_export_df(df, cols_to_export):
 
 def create_excel(df, title):
     output = io.BytesIO()
-    # PERBAIKAN: Mengkonversi seluruh DataFrame menjadi tipe string MURNI sebelum dikirim ke openpyxl
     export_df = df.copy().astype(str).replace('nan', '')
-    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df.to_excel(writer, index=False, sheet_name=title)
         style_excel_sheet(writer.sheets[title], export_df)
@@ -161,7 +157,7 @@ def create_template_excel():
     output = io.BytesIO()
     df_template = pd.DataFrame(columns=['Tanggal Laporan', 'Nama Pasien', 'No. Identitas (BPJS/NIK)', 'No. WhatsApp/HP', 'Keluhan Awal', 'Kategori', 'Tindakan / Solusi', 'Nama Petugas', 'Status'])
     df_template.loc[0] = ['2026-12-01 10:00:00', 'Contoh Nama', '000123456', '081234567', 'Contoh masalah...', 'Masalah Aplikasi', 'Sudah dibantu reset', 'Dr. Budi', 'Selesai']
-    df_template = df_template.astype(str) # Paksa string
+    df_template = df_template.astype(str)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_template.to_excel(writer, index=False, sheet_name='Template_Upload')
         style_excel_sheet(writer.sheets['Template_Upload'], df_template)
@@ -230,18 +226,17 @@ else:
         "🚀 Kelola Pasien", 
         "📝 Audit Logbook", 
         "📑 Generator Laporan", 
-        "📊 Visual Analitik", 
+        "📅 Kalender & Analitik", 
         "✍️ Input Data Baru",
         "📂 Manajemen Excel",
         "👥 Interaksi & Kategori"
     ])
 
     # =========================================================
-    # TAB 1: PENCARIAN & UPDATE
+    # TAB 1: PENCARIAN & UPDATE (BISA UBAH TANGGAL LOGBOOK)
     # =========================================================
     with tab1:
         df_all = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
-        
         cari_pasien = st.text_input("🔍 Cari Pasien untuk Diupdate (Ketik Nama, No. BPJS, atau ID):", placeholder="Contoh: Hasnadi atau 00004051...", key="search_main")
         
         if cari_pasien:
@@ -256,41 +251,53 @@ else:
                 with st.form(f"form_update_{p['id']}"):
                     st.markdown(f"**Mengelola Pasien: {p['nama_pasien']} (ID: {p['id']})**")
                     
-                    c1, c2, c3 = st.columns(3)
-                    with c1: n_nama = st.text_input("Nama Pasien", value=clean_text(p['nama_pasien']) if clean_text(p['nama_pasien']) != '-' else '')
-                    with c2: n_bpjs = st.text_input("No. BPJS / NIK", value=clean_text(p['no_bpjs']) if clean_text(p['no_bpjs']) != '-' else '')
-                    with c3: n_wa = st.text_input("No. WhatsApp/HP", value=clean_text(p['no_telp']) if clean_text(p['no_telp']) != '-' else '')
+                    # Konversi waktu dari DB ke Format Date untuk kalender picker
+                    try:
+                        tgl_asli = pd.to_datetime(p['waktu_input']).date()
+                        jam_asli = str(p['waktu_input'])[11:19] if len(str(p['waktu_input'])) > 10 else "00:00:00"
+                    except:
+                        tgl_asli = datetime.now().date()
+                        jam_asli = "00:00:00"
                     
-                    c4, c5, c6 = st.columns(3)
-                    with c4: n_tensi = st.text_input("Tensi Darah (mmHg)", value=clean_text(p.get('tensi', '')) if clean_text(p.get('tensi', '')) != '-' else '')
-                    with c5: n_suhu = st.text_input("Suhu Badan (°C)", value=clean_text(p.get('suhu', '')) if clean_text(p.get('suhu', '')) != '-' else '')
-                    with c6: n_jns = st.selectbox("Jenis Pasien", ["Umum", "BPJS", "Asuransi Lain", "VIP"], index=["Umum", "BPJS", "Asuransi Lain", "VIP"].index(p.get('jenis_pasien', 'Umum')) if p.get('jenis_pasien', 'Umum') in ["Umum", "BPJS", "Asuransi Lain", "VIP"] else 0)
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1: n_tgl = st.date_input("Tanggal Logbook", value=tgl_asli, help="Ubah tanggal ini jika data berasal dari buku log lama.")
+                    with c2: n_nama = st.text_input("Nama Pasien", value=clean_text(p['nama_pasien']) if clean_text(p['nama_pasien']) != '-' else '')
+                    with c3: n_bpjs = st.text_input("No. BPJS / NIK", value=clean_text(p['no_bpjs']) if clean_text(p['no_bpjs']) != '-' else '')
+                    with c4: n_wa = st.text_input("No. WhatsApp", value=clean_text(p['no_telp']) if clean_text(p['no_telp']) != '-' else '')
                     
-                    c7, c8, c9 = st.columns(3)
-                    with c7: n_kat = st.text_input("Kategori", value=clean_text(p['jenis_laporan']) if clean_text(p['jenis_laporan']) != '-' else '')
-                    with c8: n_petugas = st.text_input("Petugas/Dokter", value=clean_text(p['petugas']) if clean_text(p['petugas']) != '-' else '')
-                    with c9: 
+                    c5, c6, c7, c8 = st.columns(4)
+                    with c5: n_tensi = st.text_input("Tensi Darah", value=clean_text(p.get('tensi', '')) if clean_text(p.get('tensi', '')) != '-' else '')
+                    with c6: n_suhu = st.text_input("Suhu (°C)", value=clean_text(p.get('suhu', '')) if clean_text(p.get('suhu', '')) != '-' else '')
+                    with c7: n_jns = st.selectbox("Jenis Pasien", ["Umum", "BPJS", "Asuransi Lain", "VIP"], index=["Umum", "BPJS", "Asuransi Lain", "VIP"].index(p.get('jenis_pasien', 'Umum')) if p.get('jenis_pasien', 'Umum') in ["Umum", "BPJS", "Asuransi Lain", "VIP"] else 0)
+                    with c8: n_petugas = st.text_input("Petugas", value=clean_text(p['petugas']) if clean_text(p['petugas']) != '-' else '')
+                    
+                    c9, c10 = st.columns([1, 1])
+                    with c9: n_kat = st.text_input("Kategori Masalah", value=clean_text(p['jenis_laporan']) if clean_text(p['jenis_laporan']) != '-' else '')
+                    with c10: 
                         stat_list = ["Baru", "Diproses", "Selesai", "Perlu Cek Ulang", "Ditutup"]
-                        n_stat = st.selectbox("Status", stat_list, index=stat_list.index(p['status']) if p['status'] in stat_list else 0)
+                        n_stat = st.selectbox("Status Penanganan", stat_list, index=stat_list.index(p['status']) if p['status'] in stat_list else 0)
                     
                     n_solusi = st.text_area("Tindakan / Solusi Medis", value=clean_text(p['solusi']) if clean_text(p['solusi']) != '-' else '', height=68)
                     
-                    if st.form_submit_button("✔ Simpan Data Pasien"):
+                    if st.form_submit_button("✔ Simpan Update Pasien"):
                         w_skrg = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Gabungkan Tanggal Baru (n_tgl) dengan Jam Asli agar tidak merubah waktu
+                        w_input_baru = f"{n_tgl.strftime('%Y-%m-%d')} {jam_asli}"
+                        
                         w_sls = p['waktu_selesai']
                         if n_stat in ["Selesai", "Ditutup"] and w_sls == '': w_sls = w_skrg
                         
                         conn.execute("""UPDATE pipp SET 
-                                     nama_pasien=?, no_bpjs=?, no_telp=?, jenis_pasien=?, tensi=?, suhu=?,
+                                     waktu_input=?, nama_pasien=?, no_bpjs=?, no_telp=?, jenis_pasien=?, tensi=?, suhu=?,
                                      jenis_laporan=?, petugas=?, solusi=?, status=?, waktu_selesai=? WHERE id=?""", 
-                                     (n_nama, n_bpjs, n_wa, n_jns, n_tensi, n_suhu, n_kat, n_petugas, n_solusi, n_stat, w_sls, p['id']))
+                                     (w_input_baru, n_nama, n_bpjs, n_wa, n_jns, n_tensi, n_suhu, n_kat, n_petugas, n_solusi, n_stat, w_sls, p['id']))
                         conn.commit(); st.rerun()
                 st.markdown("</div><br>", unsafe_allow_html=True)
 
         st.markdown("**Data Terkini (Preview 15 Teratas):**")
         df_view = df_all.head(15) 
-        
-        html_table = "<table class='custom-table'><thead><tr><th>ID</th><th>Tgl Input</th><th>No. BPJS/NIK</th><th>Nama Pasien</th><th>Keluhan Awal</th><th>Petugas</th><th>Status</th></tr></thead><tbody>"
+        html_table = "<table class='custom-table'><thead><tr><th>ID</th><th>Tgl Logbook</th><th>No. BPJS/NIK</th><th>Nama Pasien</th><th>Keluhan Awal</th><th>Petugas</th><th>Status</th></tr></thead><tbody>"
         for _, r in df_view.iterrows():
             stt = r['status']
             bdg = "badge-selesai" if stt in ["Selesai", "Ditutup"] else ("badge-baru" if stt == "Baru" else "badge-proses")
@@ -299,7 +306,7 @@ else:
         st.markdown(html_table, unsafe_allow_html=True)
 
     # =========================================================
-    # TAB 2: AUDIT LOGBOOK (CENTANG LANGSUNG DI TABEL)
+    # TAB 2: AUDIT LOGBOOK 
     # =========================================================
     with tab2:
         st.markdown("<h4 style='color:#0f172a;'>📝 Validasi Logbook 1-Klik</h4>", unsafe_allow_html=True)
@@ -338,11 +345,11 @@ else:
             st.success("Validasi berhasil disimpan masal!")
 
     # =========================================================
-    # TAB 3: GENERATOR EKSPOR (Filter Melimpah & Fleksibel)
+    # TAB 3: GENERATOR EKSPOR SPESIFIK
     # =========================================================
     with tab3:
         st.markdown("<h4 style='color:#0f172a;'>📑 Generator Laporan Fleksibel</h4>", unsafe_allow_html=True)
-        st.info("Filter data secara spesifik sebelum men-generate laporan.")
+        st.info("Filter data secara spesifik sebelum mengekspor laporan menjadi Excel, Word, atau PDF.")
         
         df_eks = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
         df_eks['waktu_input_dt'] = pd.to_datetime(df_eks['waktu_input'], errors='coerce')
@@ -371,51 +378,77 @@ else:
         
         st.markdown("---")
         dl1, dl2, dl3 = st.columns(3)
-        nm_file = f"Laporan_Spesifik_{datetime.now().strftime('%Y%m%d')}"
-        with dl1: st.download_button("📊 Export Excel (.xlsx)", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", type="primary", use_container_width=True)
+        nm_file = f"Laporan_Klinik_{datetime.now().strftime('%Y%m%d')}"
+        with dl1: st.download_button("📊 Download Excel (.xlsx)", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", type="primary", use_container_width=True)
         with dl2:
-            try: st.download_button("📝 Export Word (.docx)", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", type="primary", use_container_width=True)
+            try: st.download_button("📝 Download Word (.docx)", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", type="primary", use_container_width=True)
             except: st.error("Install python-docx")
         with dl3:
-            try: st.download_button("📄 Export PDF (.pdf)", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", type="primary", use_container_width=True)
+            try: st.download_button("📄 Download PDF (.pdf)", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", type="primary", use_container_width=True)
             except: st.error("Install fpdf2")
 
-    # ---------------------------------------------------------
-    # TAB 4: ANALITIK (GRAFIK PROFESIONAL)
-    # ---------------------------------------------------------
+    # =========================================================
+    # TAB 4: KALENDER LAPORAN & ANALITIK (AKURASI TANGGAL LOGBOOK)
+    # =========================================================
     with tab4:
-        tampilkan_grafik = st.toggle("Aktifkan Grafik (ON/OFF)", value=True)
-        if tampilkan_grafik:
-            try:
-                c_graf1, c_graf2 = st.columns(2)
-                layout_style = dict(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(family="Inter", color="#334155"), margin=dict(t=40, b=20, l=20, r=20))
-                with c_graf1:
-                    with st.container(border=True):
-                        st.markdown("**Rasio Penyelesaian Laporan**")
-                        sc = df_all['status'].value_counts().reset_index()
-                        sc.columns = ['Status', 'Jumlah']
-                        fig1 = px.pie(sc, values='Jumlah', names='Status', hole=0.5, color_discrete_sequence=['#0ea5e9', '#3b82f6', '#f59e0b', '#10b981'])
-                        fig1.update_layout(**layout_style, showlegend=False)
-                        fig1.update_traces(textinfo='percent+label')
-                        st.plotly_chart(fig1, use_container_width=True)
-                with c_graf2:
-                    with st.container(border=True):
-                        st.markdown("**Kategori Masalah Terbanyak**")
-                        dk = df_all[(df_all['jenis_laporan'] != '') & (df_all['jenis_laporan'] != '-')]
-                        kc = dk['jenis_laporan'].value_counts().head(5).reset_index()
-                        kc.columns = ['Kategori', 'Jumlah']
-                        fig2 = px.bar(kc, x='Jumlah', y='Kategori', orientation='h', color_discrete_sequence=['#0284c7'])
-                        fig2.update_layout(**layout_style, yaxis={'categoryorder':'total ascending'})
-                        st.plotly_chart(fig2, use_container_width=True)
-            except: st.warning("Pastikan `plotly` terinstal.")
+        st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Laporan & Analitik</h4>", unsafe_allow_html=True)
+        
+        df_kal = df_all.copy()
+        df_kal['waktu_input_dt'] = pd.to_datetime(df_kal['waktu_input'], errors='coerce')
+        df_kal['tanggal_saja'] = df_kal['waktu_input_dt'].dt.date
+        
+        # LOGIKA METRIK: Memastikan tanggal input logbook benar-benar 1x24 jam terakhir
+        now = datetime.now()
+        batas_24_jam = now - timedelta(days=1)
+        
+        laporan_24jam = len(df_kal[df_kal['waktu_input_dt'] >= batas_24_jam])
+        terbengkalai = len(df_kal[(df_kal['status'] == 'Baru') & (df_kal['waktu_input_dt'] < batas_24_jam)])
+        
+        cm1, cm2, cm3 = st.columns(3)
+        cm1.metric("🔴 Data Baru Masuk (24 Jam)", laporan_24jam, help="Data yang tanggal laporannya (logbook) terjadi hari ini.")
+        cm2.metric("⏳ Laporan Terbengkalai", terbengkalai, delta="-Overdue", delta_color="inverse", help="Data lama (berdasarkan tgl logbook) yang masih berstatus 'Baru'.")
+        cm3.metric("📅 Total Historis Database", len(df_kal))
+        
+        st.markdown("---")
+        st.markdown("**🔍 Filter Kalender & Tabel Detail**")
+        fk1, fk2, fk3, fk4 = st.columns(4)
+        with fk1: rentang_kal = st.date_input("Rentang Tanggal Logbook:", value=())
+        with fk2: k_kat = st.multiselect("Kategori Laporan:", options=[k for k in df_kal['jenis_laporan'].unique() if clean_text(k) != '-'])
+        with fk3: k_stat = st.multiselect("Status:", options=df_kal['status'].unique())
+        with fk4: k_pet = st.multiselect("Petugas:", options=[p for p in df_kal['petugas'].unique() if clean_text(p) != '-'])
+        
+        df_tampil = df_kal.copy()
+        if len(rentang_kal) == 2: df_tampil = df_tampil[(df_tampil['tanggal_saja'] >= rentang_kal[0]) & (df_tampil['tanggal_saja'] <= rentang_kal[1])]
+        elif len(rentang_kal) == 1: df_tampil = df_tampil[df_tampil['tanggal_saja'] == rentang_kal[0]]
+        
+        if k_kat: df_tampil = df_tampil[df_tampil['jenis_laporan'].isin(k_kat)]
+        if k_stat: df_tampil = df_tampil[df_tampil['status'].isin(k_stat)]
+        if k_pet: df_tampil = df_tampil[df_tampil['petugas'].isin(k_pet)]
+        
+        if not df_tampil.empty:
+            df_harian = df_tampil.groupby('tanggal_saja').size().reset_index(name='Jumlah Laporan')
+            fig_kalender = px.bar(df_harian, x='tanggal_saja', y='Jumlah Laporan', title="Tren Kepadatan Laporan Harian (Sesuai Logbook)", labels={'tanggal_saja': 'Tanggal Laporan', 'Jumlah Laporan': 'Jumlah Masuk'}, color_discrete_sequence=['#0ea5e9'])
+            fig_kalender.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_tickangle=-45)
+            st.plotly_chart(fig_kalender, use_container_width=True)
+            
+            st.markdown(f"**Tabel Detail Laporan (Menampilkan {len(df_tampil)} data sesuai filter):**")
+            df_tabel_kal = df_tampil[['waktu_input', 'nama_pasien', 'keluhan', 'jenis_laporan', 'solusi', 'petugas', 'status']].copy()
+            for col in df_tabel_kal.columns: df_tabel_kal[col] = df_tabel_kal[col].apply(clean_text)
+            st.dataframe(df_tabel_kal, use_container_width=True, hide_index=True)
+        else:
+            st.info("Tidak ada data yang cocok dengan filter tanggal/kategori yang dipilih.")
 
     # ---------------------------------------------------------
-    # TAB 5: INPUT MANUAL PASIEN BARU
+    # TAB 5: INPUT MANUAL PASIEN BARU (DENGAN TANGGAL LOGBOOK)
     # ---------------------------------------------------------
     with tab5:
         with st.form("form_manual_staf"):
-            st.info("Input Pasien Baru (Tidak ada di database lama)")
-            m_nama = st.text_input("👤 Nama Pasien *")
+            st.info("Input Pasien dari Buku Log (Bisa Set Tanggal Mundur)")
+            
+            c_tgl, c_nama = st.columns([1, 2])
+            with c_tgl: m_tgl = st.date_input("🗓️ Tgl Logbook *", value=datetime.now().date(), help="Sesuaikan tanggal ini dengan kejadian di buku log fisik.")
+            with c_nama: m_nama = st.text_input("👤 Nama Pasien *")
+            
             col_m1, col_m2 = st.columns(2)
             with col_m1: 
                 m_bpjs = st.text_input("🏥 Nomor BPJS/NIK")
@@ -423,13 +456,16 @@ else:
             with col_m2: 
                 m_telp = st.text_input("📞 Nomor WA/HP")
                 m_prio = st.selectbox("Prioritas", ["Normal", "Penting", "Mendesak"])
+                
             m_jenis = st.text_input("Kategori Laporan / Masalah")
             m_keluhan = st.text_area("💬 Detail Keluhan *")
             m_solusi = st.text_area("✅ Tindakan/Solusi")
             
             if st.form_submit_button("Simpan Laporan Baru"):
                 if m_nama and m_keluhan:
-                    wkt_skrg = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # Menggabungkan Tanggal Pilihan Admin dengan Jam Saat Ini
+                    wkt_skrg = f"{m_tgl.strftime('%Y-%m-%d')} {datetime.now().strftime('%H:%M:%S')}"
+                    
                     conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, status, priority, jenis_pasien)
                                     VALUES (?,?,?,?,'-',?,?,?,?,'Selesai',?,?)''',
                                  (wkt_skrg, wkt_skrg, m_bpjs, m_nama, m_telp, m_jenis, m_keluhan, m_solusi, m_prio, m_jns))
@@ -447,7 +483,6 @@ else:
             st.markdown("##### 📤 Ekspor Keseluruhan Data Sistem")
             st.info("Unduh seluruh laporan pasien ke format Excel dengan tabel rapi.")
             try:
-                # PERBAIKAN: Melempar dataframe ke fungsi prepare_export_df agar kolomnya rapi dan sesuai bahasa
                 df_arsip = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn)
                 cols_to_export = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
                 df_arsip_rapi = prepare_export_df(df_arsip, cols_to_export)
