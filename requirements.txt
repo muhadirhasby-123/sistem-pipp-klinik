@@ -5,3 +5,4 @@ requests
 pillow
 plotly==5.20.0
 openpyxl
+plotly
