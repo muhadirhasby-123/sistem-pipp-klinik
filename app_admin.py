@@ -20,6 +20,7 @@ except ImportError:
 # =====================================================================
 PIN_ADMIN_RAHASIA = "123456" 
 DB_PATH = "klinik_pipp.db"
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" 
 
 def get_conn_write(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -47,12 +48,34 @@ init_db()
 upgrade_db()
 
 # =====================================================================
-# FUNGSI CEK DUPLIKASI GANDA
+# FUNGSI CEK & PEMBERSIH DUPLIKASI GANDA
 # =====================================================================
 def cek_duplikasi(conn, nama, keluhan, tgl_str):
     cur = conn.cursor()
     cur.execute("SELECT id FROM pipp WHERE LOWER(nama_pasien) = ? AND LOWER(keluhan) = ? AND waktu_input LIKE ?", (str(nama).lower().strip(), str(keluhan).lower().strip(), f"{tgl_str}%"))
     return cur.fetchone() is not None
+
+def bersihkan_data_ganda_db():
+    conn = get_conn_write()
+    df_temp = pd.read_sql_query("SELECT * FROM pipp", conn)
+    if df_temp.empty:
+        conn.close()
+        return 0
+    
+    df_temp['tgl_str'] = pd.to_datetime(df_temp['waktu_input'], errors='coerce').dt.strftime('%Y-%m-%d')
+    df_temp['nama_clean'] = df_temp['nama_pasien'].astype(str).str.lower().str.strip()
+    df_temp['keluhan_clean'] = df_temp['keluhan'].astype(str).str.lower().str.strip()
+    
+    # Cari duplikat berdasarkan nama, keluhan, dan tanggal yang sama
+    duplikat = df_temp[df_temp.duplicated(subset=['nama_clean', 'keluhan_clean', 'tgl_str'], keep='first')]
+    ids_to_delete = duplikat['id'].tolist()
+    
+    if ids_to_delete:
+        cur = conn.cursor()
+        cur.executemany("DELETE FROM pipp WHERE id = ?", [(i,) for i in ids_to_delete])
+        conn.commit()
+    conn.close()
+    return len(ids_to_delete)
 
 def clean_text(text):
     if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']: return '-'
@@ -84,7 +107,7 @@ def get_prepared_data():
     return df
 
 # =====================================================================
-# FUNGSI EXPORT (DIPERBARUI DENGAN IDENTITAS BPJS)
+# FUNGSI EXPORT 
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -156,6 +179,27 @@ def create_template_excel():
     return output.getvalue()
 
 # =====================================================================
+# AKSES BUKTI LAMPIRAN VIA TELEGRAM
+# =====================================================================
+if "file_id" in st.query_params:
+    file_id = st.query_params["file_id"]
+    st.title("📥 Akses Lampiran Pasien")
+    pin = st.text_input("Masukkan PIN Keamanan Admin:", type="password")
+    if pin == PIN_ADMIN_RAHASIA:
+        with st.spinner("Mengambil file dari Telegram..."):
+            file_info_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
+            res = requests.get(file_info_url).json()
+            if res.get("ok"):
+                file_path = res["result"]["file_path"]
+                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+                file_bytes = requests.get(download_url).content
+                ext = file_path.split(".")[-1] if "." in file_path else "file"
+                st.download_button(label="⬇️ Download File Lampiran", data=file_bytes, file_name=f"Bukti_Laporan.{ext}")
+            else: st.error("Gagal! File tidak ditemukan.")
+    elif pin: st.error("PIN Salah!")
+    st.stop()
+
+# =====================================================================
 # PROGRAM UTAMA ADMIN
 # =====================================================================
 st.set_page_config(page_title="Dashboard Admin", layout="wide", initial_sidebar_state="collapsed")
@@ -166,7 +210,7 @@ st.markdown("""
     .custom-table { width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .custom-table th { background-color: #1e293b; color: white; padding: 10px; text-align: left; font-size: 13px; }
     .custom-table td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #334155; }
-    .custom-table tr:hover { background-color: #f1f5f9; }
+    .custom-table tr:hover { background-color: #f8fafc; }
     
     .badge-barumasuk { background-color: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 11px; }
     .badge-overdue { background-color: #fee2e2; color: #991b1b; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 11px; }
@@ -178,34 +222,10 @@ st.markdown("""
     .warning-box { background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 15px; margin-top: 20px; border-radius: 4px; font-size: 12.5px; color: #7f1d1d;}
     
     div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
-    
-    /* CSS HACK UNTUK KALENDER INTERAKTIF AGAR BISA DIKLIK, RAPI & TIDAK TERPOTONG */
-    div[data-testid="stButton"] button p {
-        white-space: pre-wrap !important;
-        text-align: center !important;
-        line-height: 1.4 !important;
-        font-size: 14px !important;
-    }
-    
-    .btn-cal-has-data > div > button { 
-        background-color: #e0f2fe !important; 
-        border: 2px solid #0284c7 !important; 
-        border-radius: 8px !important; 
-        min-height: 80px !important; 
-        width: 100% !important;
-    }
-    .btn-cal-empty > div > button { 
-        background-color: transparent !important; 
-        border: 1px dashed #cbd5e1 !important; 
-        border-radius: 8px !important; 
-        min-height: 80px !important; 
-        width: 100% !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 if "admin_logged_in" not in st.session_state: st.session_state.admin_logged_in = False
-if "cal_selected_date" not in st.session_state: st.session_state.cal_selected_date = None
 
 if not st.session_state.admin_logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -299,119 +319,56 @@ else:
             conn.commit(); st.cache_data.clear(); st.success("Pembaruan tersimpan!"); st.rerun()
 
     # =========================================================
-    # TAB 2: KALENDER INTERAKTIF (BISA DIKLIK, TIDAK TERPOTONG, CEPAT)
+    # TAB 2: KALENDER HTML MURNI (FLEKSIBEL RANGE LUAS)
     # =========================================================
     with tab2:
-        st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Multi-Rentang & Detail Instan</h4>", unsafe_allow_html=True)
-        st.info("Pilih Tahun dan Bulan untuk melihat visualisasi kalender di sebelah kiri. Kotak yang berwarna terang menunjukkan adanya laporan, KLIK kotak tersebut untuk langsung memunculkan tabel detail secara otomatis di bagian bawah. Anda juga bisa menggunakan Filter Rentang Tanggal yang luas (Misal: 1 Jan 2025 s.d. 31 Des 2026).")
+        st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Pemantauan Laporan & Tabel</h4>", unsafe_allow_html=True)
         
         df_cal = df_master.copy()
         
-        if df_cal.empty: 
-            st.warning("Database masih kosong.")
-        else:
-            with st.expander("🔍 Filter Laporan Khusus Kalender", expanded=False):
-                f_col1, f_col2, f_col3 = st.columns(3)
-                with f_col1:
-                    f_kat_cal = st.multiselect("Kategori Laporan:", options=[k for k in df_cal['jenis_laporan'].unique() if k != '-'])
-                    f_sub_cal = st.multiselect("Subkategori:", options=[s for s in df_cal['subkategori'].unique() if s != '-'])
-                with f_col2:
-                    f_stat_cal = st.multiselect("Status:", options=[s for s in df_cal['status'].unique() if s != '-'])
-                    f_pet_cal = st.multiselect("Petugas:", options=[p for p in df_cal['petugas'].unique() if p != '-'])
-                with f_col3:
-                    f_sol_kosong = st.checkbox("Hanya Laporan Tanpa Solusi")
-                    f_kat_kosong = st.checkbox("Hanya Laporan Tanpa Kategori")
-
-            df_fil_cal = df_cal.copy()
-            if f_kat_cal: df_fil_cal = df_fil_cal[df_fil_cal['jenis_laporan'].isin(f_kat_cal)]
-            if f_sub_cal: df_fil_cal = df_fil_cal[df_fil_cal['subkategori'].isin(f_sub_cal)]
-            if f_stat_cal: df_fil_cal = df_fil_cal[df_fil_cal['status'].isin(f_stat_cal)]
-            if f_pet_cal: df_fil_cal = df_fil_cal[df_fil_cal['petugas'].isin(f_pet_cal)]
-            if f_sol_kosong: df_fil_cal = df_fil_cal[df_fil_cal['solusi'] == '-']
-            if f_kat_kosong: df_fil_cal = df_fil_cal[df_fil_cal['jenis_laporan'] == '-']
-
-            laporan_per_hari = df_fil_cal.groupby('date_only').size().to_dict()
-            st.markdown("---")
-            
-            # BAGIAN ATAS: Kalender Interaktif
-            try: default_date = df_fil_cal['date_only'].max() if not df_fil_cal.empty else datetime.now().date()
+        with st.container(border=True):
+            st.markdown("##### Visualisasi Kalender Harian")
+            try: default_date = df_cal['date_only'].max() if not df_cal.empty else datetime.now().date()
             except: default_date = datetime.now().date()
             
-            c_nav1, c_nav2 = st.columns(2)
-            with c_nav1: sel_tahun = st.selectbox("Tahun Kalender", range(2020, datetime.now().year + 3), index=(default_date.year - 2020))
+            c_nav1, c_nav2 = st.columns([1, 3])
+            with c_nav1: sel_tahun = st.selectbox("Pilih Tahun:", range(2020, datetime.now().year + 3), index=(default_date.year - 2020), key="cal_y")
             with c_nav2:
                 bulan_list = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
-                sel_bulan = st.selectbox("Bulan Kalender", range(1, 13), format_func=lambda x: bulan_list[x-1], index=(default_date.month - 1))
+                sel_bulan = st.selectbox("Pilih Bulan:", range(1, 13), format_func=lambda x: bulan_list[x-1], index=(default_date.month - 1), key="cal_m")
             
-            st.markdown(f"<h5 style='text-align:center;'>Bulan: {bulan_list[sel_bulan-1]} {sel_tahun}</h5>", unsafe_allow_html=True)
+            df_bln_ini = df_cal[(df_cal['waktu_input_dt'].dt.year == sel_tahun) & (df_cal['waktu_input_dt'].dt.month == sel_bulan)]
+            laporan_per_hari = df_bln_ini.groupby('date_only').size().to_dict()
+            html_cal = generate_html_calendar(sel_tahun, sel_bulan, laporan_per_hari)
+            st.markdown(html_cal, unsafe_allow_html=True)
             
-            # Header Hari
-            days_header = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-            cols_hdr = st.columns(7)
-            for i, day_name in enumerate(days_header):
-                cols_hdr[i].markdown(f"<div style='text-align:center; font-weight:bold; color:#475569; font-size:14px; padding-bottom:5px; border-bottom: 2px solid #e2e8f0; margin-bottom: 10px;'>{day_name}</div>", unsafe_allow_html=True)
-            
-            # GRID TOMBOL KALENDER NATIVE YANG BISA DIKLIK (Dihack CSS agar tidak kepotong)
-            cal_matrix = calendar.monthcalendar(sel_tahun, sel_bulan)
-            for week in cal_matrix:
-                cols_week = st.columns(7)
-                for i, day in enumerate(week):
-                    with cols_week[i]:
-                        if day != 0:
-                            current_dt = date(sel_tahun, sel_bulan, day)
-                            jumlah_lap = laporan_per_hari.get(current_dt, 0)
-                            
-                            # FORMAT JELAS ANTI-AMBIGU DAN TIDAK TERPOTONG KARENA CSS GLOBAL
-                            btn_label = f"Tgl {day}\n({jumlah_lap} Laporan)" if jumlah_lap > 0 else f"{day}"
-                            btn_class = "btn-cal-has-data" if jumlah_lap > 0 else "btn-cal-empty"
-                            
-                            st.markdown(f"<div class='{btn_class}'>", unsafe_allow_html=True)
-                            
-                            # Saat tombol diklik, state akan menyimpan tanggal, dan tabel di bawah otomatis memfilter!
-                            if st.button(btn_label, key=f"cal_btn_{current_dt}", use_container_width=True):
-                                st.session_state.cal_selected_date = current_dt
-                                
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        else: st.write("")
-
-            # BAGIAN BAWAH: Filter Bebas (Lintas Tahun) & Tabel Data
-            st.markdown("<hr style='margin: 30px 0;'>", unsafe_allow_html=True)
-            
-            tb_header, tb_reset = st.columns([3, 1])
-            with tb_header:
-                st.markdown("##### 🔍 Detail Laporan (Tabel)")
-                
-                # DATE INPUT SUPER FLEKSIBEL (RENTANG WAKTU LUAS)
-                tgl_pilihan = st.date_input("Filter Rentang Tanggal Alternatif (Memungkinkan pencarian lintas minggu/bulan/tahun):", value=(), min_value=date(2020, 1, 1), max_value=date(2035, 12, 31), help="Kosongkan jika ingin mengikuti pilihan klik kalender di atas.")
-                
-            with tb_reset:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🔄 Tampilkan Seluruh Data Bulanan", use_container_width=True):
-                    st.session_state.cal_selected_date = None
-                    st.rerun()
-
-            df_table_view = df_fil_cal.copy()
-            
-            # Prioritaskan Date Input jika diisi, jika tidak, gunakan klik Kalender
-            if len(tgl_pilihan) == 2:
-                df_table_view = df_table_view[(df_table_view['date_only'] >= tgl_pilihan[0]) & (df_table_view['date_only'] <= tgl_pilihan[1])]
-                st.markdown(f"**Filter Rentang: {tgl_pilihan[0]} s/d {tgl_pilihan[1]}** (Total: {len(df_table_view)} Laporan)")
-            elif len(tgl_pilihan) == 1:
-                df_table_view = df_table_view[df_table_view['date_only'] == tgl_pilihan[0]]
-                st.markdown(f"**Filter Spesifik: {tgl_pilihan[0]}** (Total: {len(df_table_view)} Laporan)")
-            elif st.session_state.cal_selected_date:
-                df_table_view = df_table_view[df_table_view['date_only'] == st.session_state.cal_selected_date]
-                st.markdown(f"**Laporan Tanggal Hasil Klik Kalender: {st.session_state.cal_selected_date}** (Total: {len(df_table_view)} Laporan)")
-            else:
-                st.markdown(f"**Menampilkan Semua Laporan Sesuai Filter di Bulan {bulan_list[sel_bulan-1]}** (Total: {len(df_table_view)})")
-
-            df_table_view = df_table_view[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']].rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Pasien', 'keluhan':'Keluhan', 'Smart_Status':'Status', 'petugas':'Petugas'})
-            
-            if df_table_view.empty: st.info("Tidak ada laporan ditemukan pada rentang/tanggal ini.")
-            else: st.dataframe(df_table_view, use_container_width=True, hide_index=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("##### 🔍 Mesin Pencari Laporan (Tarik Garis Tanggal Secara Bebas)")
+        
+        tgl_pilihan = st.date_input("Pilih Rentang Tanggal:", value=(), min_value=date(2020, 1, 1), max_value=date(2035, 12, 31), help="Pilih tanggal awal, lalu pilih tanggal akhir. Bisa beda bulan/tahun.")
+        
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            f_stat_cal = st.multiselect("Filter Status:", options=[s for s in df_cal['status'].unique() if s != '-'])
+            f_kat_cal = st.multiselect("Filter Kategori:", options=[k for k in df_cal['jenis_laporan'].unique() if k != '-'])
+        with f_col2:
+            f_pet_cal = st.multiselect("Filter Petugas:", options=[p for p in df_cal['petugas'].unique() if p != '-'])
+        
+        df_table_view = df_cal.copy()
+        if len(tgl_pilihan) == 2: df_table_view = df_table_view[(df_table_view['date_only'] >= tgl_pilihan[0]) & (df_table_view['date_only'] <= tgl_pilihan[1])]
+        elif len(tgl_pilihan) == 1: df_table_view = df_table_view[df_table_view['date_only'] == tgl_pilihan[0]]
+        
+        if f_stat_cal: df_table_view = df_table_view[df_table_view['status'].isin(f_stat_cal)]
+        if f_kat_cal: df_table_view = df_table_view[df_table_view['jenis_laporan'].isin(f_kat_cal)]
+        if f_pet_cal: df_table_view = df_table_view[df_table_view['petugas'].isin(f_pet_cal)]
+        
+        df_table_view = df_table_view[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']].rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Pasien', 'keluhan':'Keluhan', 'Smart_Status':'Status', 'petugas':'Petugas'})
+        
+        st.markdown(f"**Menemukan {len(df_table_view)} Laporan Sesuai Kriteria:**")
+        st.dataframe(df_table_view, use_container_width=True, hide_index=True)
 
     # =========================================================
-    # TAB 3: MEGA ANALITIK (SESUAI WIREFRAME REVISI)
+    # TAB 3: MEGA ANALITIK 
     # =========================================================
     with tab3:
         if "ana_drill_col" not in st.session_state: st.session_state.ana_drill_col = None
@@ -486,7 +443,7 @@ else:
         ka3.metric("Progres Audit Historis", f"{pct_audit}%", f"{jml_audit} Divalidasi")
         ka4.metric("Kelengkapan Identitas", f"{pct_identitas}%", "Ada NIK/BPJS")
         
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KONDISI DATA:</b><br>Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem (Catatan: ini hanya menunjukkan ketiadaan teks dokumentasi, bukan bukti laporan tidak ditangani). Di sisi lain, kelengkapan pengisian NIK/BPJS mencapai {pct_identitas}%.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KONDISI DATA:</b><br>Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem. Di sisi lain, kelengkapan pengisian NIK/BPJS mencapai {pct_identitas}%.</div>", unsafe_allow_html=True)
 
         # =======================================================
         # BAGIAN B: Tren dan Pola Waktu Pencatatan
@@ -510,8 +467,6 @@ else:
                 
                 fig_bulan = px.line(tren_bulan, x='Bulan_Str', y='Jumlah', markers=True, color_discrete_sequence=['#ef4444'], title="Grafik Tren Pencatatan Bulanan")
                 fig_bulan.update_layout(**layout_cfg)
-                fig_bulan.update_xaxes(title_text="Bulan (Kronologis)")
-                fig_bulan.update_yaxes(title_text="Jumlah Laporan Tercatat")
                 st.plotly_chart(fig_bulan, use_container_width=True)
                 
                 if not tren_bulan.empty:
@@ -527,15 +482,12 @@ else:
                 
                 fig_hari = px.bar(hari_c, x='Hari', y='Jumlah', color_discrete_sequence=['#8b5cf6'], title="Pola Hari Pencatatan")
                 fig_hari.update_layout(**layout_cfg)
-                fig_hari.update_xaxes(title_text="Senin -> Minggu")
-                fig_hari.update_yaxes(title_text="Total Laporan")
                 st.plotly_chart(fig_hari, use_container_width=True)
                 
-                if not hari_c.empty:
-                    hr_puncak = hari_c.loc[hari_c['Jumlah'].idxmax()]['Hari']
+                if not hari_c.empty: hr_puncak = hari_c.loc[hari_c['Jumlah'].idxmax()]['Hari']
             else: st.info("Data harian tidak tersedia.")
             
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA WAKTU:</b><br>Pencatatan data tertinggi berada pada bulan {bln_puncak} sebanyak {jml_puncak_bln} data. Untuk pola mingguan, {hr_puncak} adalah hari dengan volume pencatatan paling banyak. Penyebab lonjakan atau penurunan ini belum dapat disimpulkan murni dari data historis.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA WAKTU:</b><br>Pencatatan data tertinggi berada pada bulan {bln_puncak} sebanyak {jml_puncak_bln} data. Untuk pola mingguan, {hr_puncak} adalah hari dengan volume pencatatan paling banyak.</div>", unsafe_allow_html=True)
         if bln_puncak != "-" and st.button(f"🔍 Tampilkan Laporan di Bulan {bln_puncak} pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "Periode_Bulan_Str"
             st.session_state.ana_drill_val = bln_puncak
@@ -572,11 +524,10 @@ else:
                 kel_c = df_kel['keluhan'].value_counts().head(10).reset_index()
                 kel_c.columns = ['Teks Keluhan Asli', 'Jumlah Ditemukan']
                 st.dataframe(kel_c, use_container_width=True, hide_index=True)
-                if not kel_c.empty:
-                    kel_terbanyak = kel_c.iloc[0]['Teks Keluhan Asli']
+                if not kel_c.empty: kel_terbanyak = kel_c.iloc[0]['Teks Keluhan Asli']
             else: st.info("Data keluhan kosong.")
             
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA PASIEN & KELUHAN:</b><br>Nama yang paling sering tercatat adalah '{pas_terbanyak}' dengan {jml_pas_terbanyak} kemunculan. Teks keluhan mentah yang paling banyak diketik adalah '{kel_terbanyak}'.<br>Keterbatasan: Sistem menggunakan pencocokan teks persis. Variasi ejaan (misal 'Sri Rahayu' vs 'sri rahayu') atau kesalahan ketik dihitung terpisah, sehingga tidak bisa diklaim mutlak sebagai individu yang sama tanpa validasi NIK.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA PASIEN & KELUHAN:</b><br>Nama yang paling sering tercatat adalah '{pas_terbanyak}' dengan {jml_pas_terbanyak} kemunculan. Teks keluhan mentah yang paling banyak diketik adalah '{kel_terbanyak}'.</div>", unsafe_allow_html=True)
         if pas_terbanyak != "-" and st.button(f"🔍 Tampilkan Riwayat Nama '{pas_terbanyak}' pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "nama_clean"
             st.session_state.ana_drill_val = pas_terbanyak
@@ -622,7 +573,7 @@ else:
                 fig_bar_stack.update_layout(xaxis=dict(range=[0, 100]), **layout_cfg)
                 st.plotly_chart(fig_bar_stack, use_container_width=True)
 
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KELENGKAPAN:</b><br>Kategori klasifikasi yang paling banyak digunakan adalah '{kat_terbanyak}'. Namun, masih terdapat {jml_kat_kosong} data yang dilabeli sebagai 'Belum Diklasifikasi' (KOSONG). Admin diharapkan melengkapi kolom kategori dan solusi agar dokumentasi laporan historis semakin akurat.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KELENGKAPAN:</b><br>Kategori klasifikasi yang paling banyak digunakan adalah '{kat_terbanyak}'. Namun, masih terdapat {jml_kat_kosong} data yang dilabeli sebagai 'Belum Diklasifikasi' (KOSONG).</div>", unsafe_allow_html=True)
         if st.button("🔍 Tampilkan Laporan yang Kategori/Solusinya Masih Kosong pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "solusi"
             st.session_state.ana_drill_val = "KOSONG"
@@ -645,13 +596,27 @@ else:
         
         st.dataframe(df_view_final, use_container_width=True, hide_index=True)
         
-        st.markdown("<div class='warning-box'>⚠️ <b>Peringatan Keterbatasan Historis:</b> Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data di sistem. Karena alur operasional historis tidak direkam secara memadai, metrik ini tidak ditujukan untuk mengukur keberhasilan penyelesaian kasus, kinerja petugas medis, atau status 'terbengkalai'.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warning-box'>⚠️ <b>Peringatan Keterbatasan Historis:</b> Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data di sistem.</div>", unsafe_allow_html=True)
 
     # =========================================================
     # TAB 4: PUSAT EKSPOR & IMPOR 
     # =========================================================
     with tab4:
         st.markdown("<h4 style='color:#0f172a;'>📑 Pusat Ekspor & Impor Data Klinik</h4>", unsafe_allow_html=True)
+        
+        # FITUR TAMBAHAN: TOMBOL PEMBERSIH DUPLIKAT HISTORIS
+        with st.container(border=True):
+            st.markdown("##### 🧹 Pembersih Data Ganda (Deduplication Tool)")
+            st.info("Jika database Anda terlanjur memiliki data duplikat dari masa lalu (kesalahan impor sebelumnya), klik tombol di bawah untuk membersihkannya secara otomatis.")
+            if st.button("🧼 Hapus Semua Data Ganda di Database Sekarang", type="primary"):
+                jml_dihapus = bersihkan_data_ganda_db()
+                if jml_dihapus > 0:
+                    st.success(f"Berhasil membersihkan dan menghapus {jml_dihapus} data ganda dari database!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.info("Tidak ditemukan data ganda di dalam database. Data sudah bersih!")
+
         with st.container(border=True):
             st.markdown("##### 🔍 1. Ekspor Data Spesifik Terfilter")
             df_eks = df_master.copy()
