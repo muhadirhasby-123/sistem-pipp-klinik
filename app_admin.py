@@ -20,7 +20,7 @@ except ImportError:
 # =====================================================================
 PIN_ADMIN_RAHASIA = "123456" 
 DB_PATH = "klinik_pipp.db"
-TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- Pastikan token Telegram aman
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI"
 
 def get_conn_write(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -54,10 +54,6 @@ def cek_duplikasi(conn, nama, keluhan, tgl_str):
     cur = conn.cursor()
     cur.execute("SELECT id FROM pipp WHERE LOWER(nama_pasien) = ? AND LOWER(keluhan) = ? AND waktu_input LIKE ?", (str(nama).lower().strip(), str(keluhan).lower().strip(), f"{tgl_str}%"))
     return cur.fetchone() is not None
-
-def clean_text(text):
-    if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']: return '-'
-    return str(text)
 
 @st.cache_data(ttl=2) 
 def get_prepared_data():
@@ -107,7 +103,7 @@ def generate_html_calendar(year, month, data_dict):
     return html
 
 # =====================================================================
-# FUNGSI EXPORT (DIPERBARUI DENGAN IDENTITAS BPJS)
+# FUNGSI EXPORT 
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -177,27 +173,6 @@ def create_template_excel():
         df_template.astype(str).to_excel(writer, index=False, sheet_name='Template_Upload')
         style_excel_sheet(writer.sheets['Template_Upload'], df_template)
     return output.getvalue()
-
-# =====================================================================
-# AKSES BUKTI LAMPIRAN VIA TELEGRAM
-# =====================================================================
-if "file_id" in st.query_params:
-    file_id = st.query_params["file_id"]
-    st.title("📥 Akses Lampiran Pasien")
-    pin = st.text_input("Masukkan PIN Keamanan Admin:", type="password")
-    if pin == PIN_ADMIN_RAHASIA:
-        with st.spinner("Mengambil file dari Telegram..."):
-            file_info_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
-            res = requests.get(file_info_url).json()
-            if res.get("ok"):
-                file_path = res["result"]["file_path"]
-                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-                file_bytes = requests.get(download_url).content
-                ext = file_path.split(".")[-1] if "." in file_path else "file"
-                st.download_button(label="⬇️ Download File Lampiran", data=file_bytes, file_name=f"Bukti_Laporan.{ext}")
-            else: st.error("Gagal! File tidak ditemukan.")
-    elif pin: st.error("PIN Salah!")
-    st.stop()
 
 # =====================================================================
 # PROGRAM UTAMA ADMIN
@@ -319,13 +294,15 @@ else:
             conn.commit(); st.cache_data.clear(); st.success("Pembaruan tersimpan!"); st.rerun()
 
     # =========================================================
-    # TAB 2: KALENDER HTML MURNI (ANTI LEMOT & TIDAK TERPOTONG)
+    # TAB 2: KALENDER (DENGAN QUICK FILTER TANGGAL LINTAS TAHUN)
     # =========================================================
     with tab2:
         st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Pemantauan Laporan</h4>", unsafe_allow_html=True)
         
         df_cal = df_master.copy()
-        with st.container(border=True):
+        
+        cal_left, cal_right = st.columns([1, 1], gap="large")
+        with cal_left:
             st.markdown("##### Visualisasi Kalender Harian")
             try: default_date = df_cal['date_only'].max() if not df_cal.empty else datetime.now().date()
             except: default_date = datetime.now().date()
@@ -341,43 +318,54 @@ else:
             html_cal = generate_html_calendar(sel_tahun, sel_bulan, laporan_per_hari)
             st.markdown(html_cal, unsafe_allow_html=True)
             
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("##### 🔍 Mesin Pencari Laporan Harian")
-        
-        tgl_pilihan = st.date_input("Filter Rentang Tanggal:", value=(), help="Contoh: Pilih 1 Agustus sampai 31 Agustus")
-        
-        f_col1, f_col2 = st.columns(2)
-        with f_col1:
-            f_stat_cal = st.multiselect("Filter Status:", options=[s for s in df_cal['status'].unique() if s != '-'])
-            f_kat_cal = st.multiselect("Filter Kategori:", options=[k for k in df_cal['jenis_laporan'].unique() if k != '-'])
-        with f_col2:
-            f_pet_cal = st.multiselect("Filter Petugas:", options=[p for p in df_cal['petugas'].unique() if p != '-'])
-        
-        df_table_view = df_cal.copy()
-        if len(tgl_pilihan) == 2: df_table_view = df_table_view[(df_table_view['date_only'] >= tgl_pilihan[0]) & (df_table_view['date_only'] <= tgl_pilihan[1])]
-        elif len(tgl_pilihan) == 1: df_table_view = df_table_view[df_table_view['date_only'] == tgl_pilihan[0]]
-        
-        if f_stat_cal: df_table_view = df_table_view[df_table_view['status'].isin(f_stat_cal)]
-        if f_kat_cal: df_table_view = df_table_view[df_table_view['jenis_laporan'].isin(f_kat_cal)]
-        if f_pet_cal: df_table_view = df_table_view[df_table_view['petugas'].isin(f_pet_cal)]
-        
-        df_table_view = df_table_view[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']].rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Pasien', 'keluhan':'Keluhan', 'Smart_Status':'Status', 'petugas':'Petugas'})
-        
-        st.markdown(f"**Menemukan {len(df_table_view)} Laporan Sesuai Kriteria:**")
-        st.dataframe(df_table_view, use_container_width=True, hide_index=True)
+        with cal_right:
+            st.markdown("##### 🔍 Mesin Pencari Laporan (Rentang Waktu Lintas Tahun)")
+            st.write("Gunakan pilihan cepat di bawah ini untuk mem-filter tabel, atau tentukan tanggal lintas tahun secara manual.")
+            
+            # QUICK FILTERS UNTUK MEMPERMUDAH RENTANG TAHUNAN
+            c_qk1, c_qk2, c_qk3, c_qk4, c_qk5 = st.columns(5)
+            today = datetime.now().date()
+            if 'quick_date' not in st.session_state: st.session_state.quick_date = ()
+            
+            if c_qk1.button("Hari Ini", use_container_width=True): st.session_state.quick_date = (today, today)
+            if c_qk2.button("7 Hari", use_container_width=True): st.session_state.quick_date = (today - timedelta(days=7), today)
+            if c_qk3.button("Bulan Ini", use_container_width=True): st.session_state.quick_date = (today.replace(day=1), today)
+            if c_qk4.button("Tahun Ini", use_container_width=True): st.session_state.quick_date = (today.replace(month=1, day=1), today)
+            if c_qk5.button("Semua", use_container_width=True): st.session_state.quick_date = ()
+            
+            tgl_pilihan = st.date_input("Filter Rentang Tanggal Spesifik:", value=st.session_state.quick_date)
+            
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
+                f_stat_cal = st.multiselect("Filter Status:", options=[s for s in df_cal['status'].unique() if s != '-'])
+                f_kat_cal = st.multiselect("Filter Kategori:", options=[k for k in df_cal['jenis_laporan'].unique() if k != '-'])
+            with f_col2:
+                f_pet_cal = st.multiselect("Filter Petugas:", options=[p for p in df_cal['petugas'].unique() if p != '-'])
+            
+            df_table_view = df_cal.copy()
+            if len(tgl_pilihan) == 2: df_table_view = df_table_view[(df_table_view['date_only'] >= tgl_pilihan[0]) & (df_table_view['date_only'] <= tgl_pilihan[1])]
+            elif len(tgl_pilihan) == 1: df_table_view = df_table_view[df_table_view['date_only'] == tgl_pilihan[0]]
+            
+            if f_stat_cal: df_table_view = df_table_view[df_table_view['status'].isin(f_stat_cal)]
+            if f_kat_cal: df_table_view = df_table_view[df_table_view['jenis_laporan'].isin(f_kat_cal)]
+            if f_pet_cal: df_table_view = df_table_view[df_table_view['petugas'].isin(f_pet_cal)]
+            
+            df_table_view = df_table_view[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']].rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Pasien', 'keluhan':'Keluhan', 'Smart_Status':'Status', 'petugas':'Petugas'})
+            
+            st.markdown(f"**Menemukan {len(df_table_view)} Laporan Sesuai Kriteria:**")
+            st.dataframe(df_table_view, use_container_width=True, hide_index=True)
 
     # =========================================================
     # TAB 3: MEGA ANALITIK (SESUAI WIREFRAME REVISI)
     # =========================================================
     with tab3:
-        # Inisialisasi Session State Drill-Down
         if "ana_drill_col" not in st.session_state: st.session_state.ana_drill_col = None
         if "ana_drill_val" not in st.session_state: st.session_state.ana_drill_val = None
         
         df_an = df_master.copy()
-        # Normalisasi String Kosong
-        kata_kosong = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']
-        cols_check = ['nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi']
+        kata_kosong = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None', 'KOSONG (Tanpa Petugas)', 'KOSONG (Belum Diklasifikasi)']
+        
+        cols_check = ['nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi', 'petugas']
         for c in cols_check:
             if c in df_an.columns: df_an[c] = df_an[c].replace(kata_kosong, 'KOSONG')
         
@@ -385,9 +373,8 @@ else:
         except: min_d = "-"; max_d = "-"
         
         st.markdown("#### ⚙️ Filter Global & Status Data")
-        st.markdown(f"**🗓️ Rentang Tanggal Historis:** {min_d} hingga {max_d}")
+        st.markdown(f"**🗓️ Rentang Tanggal Historis Database:** {min_d} hingga {max_d}")
         
-        # Filter Tanggal Global
         col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
             tgl_global = st.date_input("Date Input Range: Filter Global", value=(), key="ana_tgl_global")
@@ -401,7 +388,6 @@ else:
                 if st.button("❌ Hapus Drill-Down", use_container_width=True):
                     st.session_state.ana_drill_col = None; st.session_state.ana_drill_val = None; st.rerun()
 
-        # Eksekusi Filter Global
         df_filtered = df_an.copy()
         if len(tgl_global) == 2: df_filtered = df_filtered[(df_filtered['date_only'] >= tgl_global[0]) & (df_filtered['date_only'] <= tgl_global[1])]
         elif len(tgl_global) == 1: df_filtered = df_filtered[df_filtered['date_only'] == tgl_global[0]]
@@ -410,7 +396,6 @@ else:
         total_filtered = len(df_filtered)
         is_drill_active = st.session_state.ana_drill_col is not None
         
-        # Eksekusi Detail Tabel Simulasi Drilldown untuk count
         df_drilldown = df_filtered.copy()
         if is_drill_active:
             col_filter = st.session_state.ana_drill_col
@@ -684,33 +669,97 @@ else:
                 except Exception as e: st.error(f"Gagal memproses file: {e}")
 
     # =========================================================
-    # TAB 5: INPUT MANUAL PASIEN BARU (ANTI GANDA)
+    # TAB 5: INPUT MANUAL & GEMINI IMPORTER (ANTI GANDA)
     # =========================================================
     with tab5:
-        with st.form("form_manual_staf"):
-            st.info("Sistem ini dilengkapi sensor Pencegah Duplikasi. Pasien tidak bisa lapor keluhan yang sama dua kali di hari yang sama.")
-            c_tgl, c_nama = st.columns([1, 2])
-            with c_tgl: m_tgl = st.date_input("🗓️ Tgl Logbook *", value=datetime.now().date())
-            with c_nama: m_nama = st.text_input("👤 Nama Pasien *")
-            col_m1, col_m2 = st.columns(2)
-            with col_m1: m_bpjs = st.text_input("🏥 Nomor BPJS/NIK"); m_jns = st.selectbox("Jenis Pasien", ["Umum", "BPJS", "Asuransi Lain"])
-            with col_m2: m_telp = st.text_input("📞 Nomor WA/HP"); m_prio = st.selectbox("Prioritas", ["Normal", "Penting", "Mendesak"])
-            m_jenis = st.text_input("Kategori Laporan / Masalah")
-            m_keluhan = st.text_area("💬 Detail Keluhan *")
-            m_solusi = st.text_area("✅ Tindakan/Solusi")
+        tab_man, tab_gem = st.tabs(["✍️ Input Manual Form", "🤖 Import Data Cepat dari Gemini AI"])
+        
+        with tab_man:
+            with st.form("form_manual_staf"):
+                st.info("Sistem ini dilengkapi sensor Pencegah Duplikasi. Pasien tidak bisa lapor keluhan yang sama dua kali di hari yang sama.")
+                c_tgl, c_nama = st.columns([1, 2])
+                with c_tgl: m_tgl = st.date_input("🗓️ Tgl Logbook *", value=datetime.now().date())
+                with c_nama: m_nama = st.text_input("👤 Nama Pasien *")
+                col_m1, col_m2 = st.columns(2)
+                with col_m1: m_bpjs = st.text_input("🏥 Nomor BPJS/NIK"); m_jns = st.selectbox("Jenis Pasien", ["Umum", "BPJS", "Asuransi Lain"])
+                with col_m2: m_telp = st.text_input("📞 Nomor WA/HP"); m_prio = st.selectbox("Prioritas", ["Normal", "Penting", "Mendesak"])
+                m_jenis = st.text_input("Kategori Laporan / Masalah")
+                m_keluhan = st.text_area("💬 Detail Keluhan *")
+                m_solusi = st.text_area("✅ Tindakan/Solusi")
+                
+                if st.form_submit_button("Simpan Laporan Baru"):
+                    if m_nama and m_keluhan:
+                        conn = get_conn_write()
+                        tgl_str = m_tgl.strftime('%Y-%m-%d')
+                        if cek_duplikasi(conn, m_nama, m_keluhan, tgl_str):
+                            st.error(f"⛔ DUPLIKASI DICEGAH: Pasien atas nama '{m_nama}' sudah pernah melaporkan keluhan yang sama persis pada tanggal {tgl_str}. Mohon periksa kembali!")
+                        else:
+                            wkt_skrg = f"{tgl_str} {datetime.now().strftime('%H:%M:%S')}"
+                            conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, status, priority, jenis_pasien) VALUES (?,?,?,?,'-',?,?,?,?,'Baru',?,?)''', (wkt_skrg, wkt_skrg, m_bpjs, m_nama, m_telp, m_jenis, m_keluhan, m_solusi, m_prio, m_jns))
+                            conn.commit(); st.cache_data.clear(); st.success("Data berhasil ditambahkan!"); st.rerun()
+                    else: st.error("Nama dan Keluhan wajib diisi.")
+
+        with tab_gem:
+            st.info("Anda bisa mengunggah foto logbook langsung ke kolom obrolan **Gemini AI**, lalu gunakan perintah teks (Prompt) di bawah ini agar Gemini mengubah foto tersebut menjadi format teks yang rapi. Setelah itu, *paste* hasilnya ke kotak di bawah.")
+            st.code("Tolong ekstrak foto data logbook ini menjadi teks. Susun dalam format persis seperti ini (pisahkan dengan garis lurus '|'):\nTanggal (YYYY-MM-DD) | Nama Pasien | NIK/BPJS | No HP | Kategori | Keluhan | Solusi\n\nJika ada yang kosong, tulis strip (-).", language="text")
             
-            if st.form_submit_button("Simpan Laporan Baru"):
-                if m_nama and m_keluhan:
+            gemini_text = st.text_area("Paste hasil teks dari Gemini di sini:", height=150, placeholder="2026-09-14 | Sri Rahayu | 123456789 | 08123 | Umum | Pusing | Paracetamol\n2026-09-14 | Budi | 987654321 | 08999 | BPJS | Demam | Rujuk")
+            
+            if st.button("🔍 Review & Cek Duplikasi", type="primary"):
+                if gemini_text:
+                    lines = gemini_text.strip().split('\n')
+                    parsed_data = []
                     conn = get_conn_write()
-                    tgl_str = m_tgl.strftime('%Y-%m-%d')
                     
-                    if cek_duplikasi(conn, m_nama, m_keluhan, tgl_str):
-                        st.error(f"⛔ DUPLIKASI DICEGAH: Pasien atas nama '{m_nama}' sudah pernah melaporkan keluhan yang sama persis pada tanggal {tgl_str}. Mohon periksa kembali!")
+                    for line in lines:
+                        if '|' in line:
+                            parts = [p.strip() for p in line.split('|')]
+                            if len(parts) >= 6:
+                                tgl = parts[0] if parts[0] != '-' else datetime.now().strftime('%Y-%m-%d')
+                                nama = parts[1]
+                                nik = parts[2]
+                                hp = parts[3]
+                                kat = parts[4]
+                                keluhan = parts[5]
+                                solusi = parts[6] if len(parts) > 6 else "-"
+                                
+                                is_dup = cek_duplikasi(conn, nama, keluhan, tgl[:10])
+                                status_dup = "❌ GANDA (Ditolak)" if is_dup else "✅ AMAN"
+                                
+                                parsed_data.append({
+                                    "Tgl": tgl, "Nama": nama, "NIK": nik, "No_HP": hp, 
+                                    "Kategori": kat, "Keluhan": keluhan, "Solusi": solusi,
+                                    "Status Cek": status_dup, "is_dup": is_dup
+                                })
+                    
+                    if parsed_data:
+                        st.session_state.gemini_parsed = parsed_data
+                        st.success("Teks berhasil dibaca! Silakan periksa hasil pratinjau di bawah ini sebelum menyimpan.")
                     else:
-                        wkt_skrg = f"{tgl_str} {datetime.now().strftime('%H:%M:%S')}"
-                        conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, status, priority, jenis_pasien) VALUES (?,?,?,?,'-',?,?,?,?,'Baru',?,?)''', (wkt_skrg, wkt_skrg, m_bpjs, m_nama, m_telp, m_jenis, m_keluhan, m_solusi, m_prio, m_jns))
-                        conn.commit(); st.cache_data.clear(); st.success("Data berhasil ditambahkan!"); st.rerun()
-                else: st.error("Nama dan Keluhan wajib diisi.")
+                        st.error("Format tidak dikenali. Pastikan Anda menyalin teks hasil Gemini yang menggunakan pemisah garis lurus (|).")
+                        
+            if 'gemini_parsed' in st.session_state and st.session_state.gemini_parsed:
+                df_parsed = pd.DataFrame(st.session_state.gemini_parsed)
+                st.dataframe(df_parsed.drop(columns=['is_dup']), use_container_width=True)
+                
+                if st.button("💾 Simpan Data 'Aman' ke Database", type="primary"):
+                    conn = get_conn_write()
+                    masuk = 0
+                    ditolak = 0
+                    wkt_skrg_time = datetime.now().strftime('%H:%M:%S')
+                    
+                    for item in st.session_state.gemini_parsed:
+                        if not item['is_dup']:
+                            wkt_gabung = f"{item['Tgl'][:10]} {wkt_skrg_time}" if len(item['Tgl']) >= 10 else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, alamat, no_telp, jenis_laporan, keluhan, solusi, status, priority, jenis_pasien) VALUES (?,?,?,?,'-',?,?,?,?,'Baru','Normal','Umum')''', (wkt_gabung, wkt_gabung, item['NIK'], item['Nama'], item['No_HP'], item['Kategori'], item['Keluhan'], item['Solusi']))
+                            masuk += 1
+                        else:
+                            ditolak += 1
+                    
+                    conn.commit(); st.cache_data.clear()
+                    st.session_state.gemini_parsed = None 
+                    st.success(f"Proses Selesai! {masuk} data berhasil disimpan. {ditolak} data ganda ditolak dan dibuang.")
+                    st.rerun()
 
     # =========================================================
     # TAB 6: KONTAK & KATEGORI
