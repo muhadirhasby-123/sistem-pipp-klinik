@@ -9,6 +9,7 @@ import plotly.express as px
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
+# Import library untuk Word dan PDF
 try:
     from docx import Document
     from fpdf import FPDF
@@ -18,8 +19,8 @@ except ImportError:
 # =====================================================================
 # PENGATURAN & KONEKSI
 # =====================================================================
-PIN_ADMIN_RAHASIA = "123456" # <-- GANTI PIN ASLI
-TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- GANTI TOKEN ASLI
+PIN_ADMIN_RAHASIA = "123456" # <-- GANTI DENGAN PIN ASLI
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- GANTI DENGAN TOKEN ASLI
 APP_URL = "https://pipp-klinik.streamlit.app"
 DB_PATH = "klinik_pipp.db"
 
@@ -50,8 +51,22 @@ def upgrade_db():
 init_db()
 upgrade_db()
 
+def clean_text(text):
+    if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']: return '-'
+    return str(text)
+
+def get_smart_status(status_db, waktu_input_str):
+    try:
+        tgl_logbook = pd.to_datetime(waktu_input_str)
+        batas_24_jam = datetime.now() - timedelta(days=1)
+        if status_db == 'Baru':
+            if tgl_logbook >= batas_24_jam: return "Baru Masuk"
+            else: return "Overdue"
+        return status_db
+    except: return status_db
+
 # =====================================================================
-# FUNGSI EXPORT (KEBAL ERROR FLOAT)
+# FUNGSI EXPORT 
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -69,14 +84,7 @@ def style_excel_sheet(worksheet, dataframe):
             cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 def prepare_export_df(df, cols_to_export):
-    mapping = {
-        'id': 'ID Laporan', 'waktu_input': 'Tgl Laporan', 'nama_pasien': 'Nama Pasien',
-        'no_bpjs': 'No. BPJS/NIK', 'no_telp': 'No. WhatsApp', 'alamat': 'Alamat',
-        'jenis_pasien': 'Jenis Pasien', 'keluhan': 'Keluhan/Diagnosa Awal', 
-        'jenis_laporan': 'Kategori Utama', 'subkategori': 'Subkategori',
-        'tensi': 'Tensi Darah', 'suhu': 'Suhu Badan',
-        'solusi': 'Tindakan/Solusi Akhir', 'petugas': 'Petugas/Dokter', 'status': 'Status Akhir'
-    }
+    mapping = {'id': 'ID', 'waktu_input': 'Tgl Laporan', 'nama_pasien': 'Nama Pasien', 'no_bpjs': 'No. BPJS/NIK', 'no_telp': 'WhatsApp', 'alamat': 'Alamat', 'jenis_pasien': 'Jenis Pasien', 'keluhan': 'Keluhan', 'jenis_laporan': 'Kategori', 'subkategori': 'Subkategori', 'tensi': 'Tensi', 'suhu': 'Suhu', 'solusi': 'Tindakan', 'petugas': 'Petugas', 'status': 'Status'}
     df_eks = df.rename(columns=mapping)
     valid_cols = [mapping.get(c, c) for c in cols_to_export]
     return df_eks[[c for c in valid_cols if c in df_eks.columns]]
@@ -138,11 +146,16 @@ st.set_page_config(page_title="Dashboard Admin", layout="wide", initial_sidebar_
 st.markdown("""
 <style>
     .stApp { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .custom-table { width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    .custom-table th { background-color: #0f172a; color: white; padding: 12px; text-align: left; font-size: 14px; font-weight: 600; }
+    .custom-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; color: #334155; }
+    .custom-table tr:hover { background-color: #f8fafc; }
+    .badge-barumasuk { background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 12px; }
+    .badge-overdue { background-color: #fee2e2; color: #991b1b; border: 1px solid #fecaca; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 12px; }
+    .badge-selesai { background-color: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 12px; }
+    .badge-proses { background-color: #fef9c3; color: #854d0e; border: 1px solid #fef08a; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 12px; }
     .form-container { background: white; padding: 20px; border-radius: 12px; border-top: 4px solid #0ea5e9; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); margin-top: -10px; }
     div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
-    div[data-testid="stFormSubmitButton"] > button:hover { background: #0284c7 !important; transform: scale(1.02); }
-    .btn-cal-has-data > button { background-color: #0ea5e9 !important; color: white !important; font-weight: bold !important; border: none !important; }
-    .btn-cal-empty > button { background-color: transparent !important; color: #94a3b8 !important; border: 1px dashed #cbd5e1 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -157,57 +170,46 @@ if not st.session_state.admin_logged_in:
             if st.text_input("PIN", type="password") == PIN_ADMIN_RAHASIA: st.session_state.admin_logged_in = True; st.rerun()
 else:
     conn = get_conn()
-    
-    # =========================================================
-    # OPTIMASI SUPER CEPAT (VECTORIZED PANDAS) -> ANTI LEMOT/NGEBLANK
-    # =========================================================
     df_master = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
     df_master['waktu_input_dt'] = pd.to_datetime(df_master['waktu_input'], errors='coerce')
     df_master['date_only'] = df_master['waktu_input_dt'].dt.date
     
-    # Bersihkan Data Tanpa Looping (Super Cepat)
     kata_kotor = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']
     cols_to_clean = ['nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'keluhan', 'jenis_laporan', 'subkategori', 'solusi', 'petugas']
     df_master[cols_to_clean] = df_master[cols_to_clean].replace(kata_kotor, '-')
     
-    # Status Pintar Vectorized (0.01 detik)
     batas_24_jam = datetime.now() - timedelta(days=1)
     df_master['Smart_Status'] = df_master['status']
     is_baru = df_master['status'] == 'Baru'
     is_fresh = df_master['waktu_input_dt'] >= batas_24_jam
-    
     df_master.loc[is_baru & is_fresh, 'Smart_Status'] = 'Baru Masuk'
     df_master.loc[is_baru & ~is_fresh, 'Smart_Status'] = 'Overdue'
 
     st.markdown("<h2 style='color:#0f172a; margin-top: -20px;'>🏥 Dashboard Klinik Pratama Papan Mas</h2>", unsafe_allow_html=True)
     
-    # TAB AUDIT LOGBOOK DIHAPUS (Digabung ke Tab 1) -> Sisa 7 Tab
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    # === TAB DIGABUNG! DARI 7 MENJADI 6 TAB ===
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🚀 Kelola Pasien & Audit", 
-        "📑 Generator Laporan", 
         "📅 Kalender Laporan", 
         "📊 Mega Analitik 1000+", 
+        "📑 Pusat Ekspor & Impor", # TAB GABUNGAN
         "✍️ Input Data Baru", 
-        "📂 Manajemen Excel", 
         "👥 Interaksi & Kategori"
     ])
 
     # =========================================================
-    # TAB 1: PENCARIAN & UPDATE + AUDIT LANGSUNG DI TABEL
+    # TAB 1: PENCARIAN, UPDATE & AUDIT (GABUNGAN)
     # =========================================================
     with tab1:
-        cari_pasien = st.text_input("🔍 Cari Pasien untuk Diupdate (Ketik Nama, No. BPJS, atau ID):", placeholder="Contoh: Hasnadi...", key="search_main")
-        
+        cari_pasien = st.text_input("🔍 Cari Pasien untuk Diupdate (Ketik Nama, No. BPJS, atau ID):", placeholder="Contoh: Hasnadi...")
         if cari_pasien:
             sq = cari_pasien.lower()
             hasil = df_master[df_master['nama_pasien'].str.lower().str.contains(sq) | df_master['no_bpjs'].str.lower().str.contains(sq) | df_master['id'].astype(str).str.contains(sq)]
-            
             if not hasil.empty:
                 p = hasil.iloc[0]
                 st.markdown("<div class='form-container'>", unsafe_allow_html=True)
                 with st.form(f"form_update_{p['id']}"):
                     st.markdown(f"**Mengelola Pasien: {p['nama_pasien']} (ID: {p['id']})**")
-                    
                     try: tgl_asli = pd.to_datetime(p['waktu_input']).date(); jam_asli = str(p['waktu_input'])[11:19] if len(str(p['waktu_input'])) > 10 else "00:00:00"
                     except: tgl_asli = datetime.now().date(); jam_asli = "00:00:00"
                     
@@ -240,78 +242,31 @@ else:
                         conn.commit(); st.rerun()
                 st.markdown("</div><br>", unsafe_allow_html=True)
 
-        # TABEL INTERAKTIF PENGGANTI TAB AUDIT
         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-        st.markdown("#### 📋 Data Pasien & Validasi Cepat")
-        st.info("💡 **Tips Cepat:** Centang kotak `✔ Selesai & Valid` di tabel bawah, lalu klik 'Simpan Perubahan' untuk langsung merubah status Overdue/Baru menjadi Selesai tanpa buka form.")
+        st.markdown("#### 📋 Data Pasien & Validasi Audit (1-Klik)")
+        st.info("💡 **Tips Cepat:** Centang kotak `✔ Selesai & Valid` di tabel bawah, lalu klik 'Simpan' untuk merubah status Overdue/Baru menjadi Selesai sakaligus mengaudit data tanpa harus buka form!")
         
         df_audit = df_master.copy()
-        
-        # Logika centang otomatis jika memang sudah Selesai atau sudah di-audit
         df_audit['✔ Selesai & Valid'] = df_audit['status'].isin(['Selesai', 'Ditutup']) | (df_audit['is_audited'] == 1)
         
         df_edit_view = df_audit[['✔ Selesai & Valid', 'id', 'waktu_input', 'no_bpjs', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']]
-        df_edit_view = df_edit_view.rename(columns={'waktu_input':'Tgl Logbook', 'nama_pasien':'Nama Pasien', 'no_bpjs': 'No. BPJS/NIK', 'keluhan':'Keluhan', 'petugas':'Petugas', 'Smart_Status':'Status'})
+        df_edit_view = df_edit_view.rename(columns={'waktu_input':'Tgl Logbook', 'nama_pasien':'Nama Pasien', 'no_bpjs': 'Identitas', 'Smart_Status':'Status'})
         
-        edited_df = st.data_editor(
-            df_edit_view,
-            hide_index=True,
-            use_container_width=True,
-            disabled=['id', 'Tgl Logbook', 'No. BPJS/NIK', 'Nama Pasien', 'Keluhan', 'Status', 'Petugas']
-        )
+        edited_df = st.data_editor(df_edit_view, hide_index=True, use_container_width=True, disabled=['id', 'Tgl Logbook', 'Identitas', 'Nama Pasien', 'keluhan', 'Status', 'petugas'])
         
-        if st.button("💾 Simpan Perubahan Checklist Tabel", type="primary"):
+        if st.button("💾 Simpan Validasi Centang", type="primary"):
             w_skrg = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for index, row in edited_df.iterrows():
-                # Jika dicentang di UI
                 if row['✔ Selesai & Valid']:
-                    # Force update status ke Selesai dan is_audited ke 1 (Sesuai instruksi)
                     conn.execute("UPDATE pipp SET status = 'Selesai', is_audited = 1, waktu_selesai = ? WHERE id = ? AND status != 'Selesai'", (w_skrg, row['id']))
                     conn.execute("UPDATE pipp SET is_audited = 1 WHERE id = ?", (row['id'],))
-                else:
-                    conn.execute("UPDATE pipp SET is_audited = 0 WHERE id = ?", (row['id'],))
+                else: conn.execute("UPDATE pipp SET is_audited = 0 WHERE id = ?", (row['id'],))
             conn.commit(); st.success("Pembaruan tersimpan!"); st.rerun()
 
     # =========================================================
-    # TAB 2: GENERATOR EKSPOR SPESIFIK
+    # TAB 2: KALENDER LAPORAN INTERAKTIF
     # =========================================================
     with tab2:
-        st.markdown("<h4 style='color:#0f172a;'>📑 Generator Laporan Fleksibel</h4>", unsafe_allow_html=True)
-        df_eks = df_master.copy()
-        
-        f1, f2, f3, f4 = st.columns(4)
-        with f1: fil_tgl = st.date_input("🗓️ Rentang Waktu:", value=())
-        with f2: fil_stat = st.multiselect("🚦 Filter Status:", options=df_eks['status'].unique())
-        with f3: fil_kat = st.multiselect("🩺 Filter Kategori:", options=[k for k in df_eks['jenis_laporan'].unique() if k != '-'])
-        with f4: fil_petugas = st.multiselect("👨‍⚕️ Filter Petugas:", options=[p for p in df_eks['petugas'].unique() if p != '-'])
-        
-        if len(fil_tgl) == 2: df_eks = df_eks[(df_eks['date_only'] >= fil_tgl[0]) & (df_eks['date_only'] <= fil_tgl[1])]
-        elif len(fil_tgl) == 1: df_eks = df_eks[df_eks['date_only'] == fil_tgl[0]]
-        if fil_stat: df_eks = df_eks[df_eks['status'].isin(fil_stat)]
-        if fil_kat: df_eks = df_eks[df_eks['jenis_laporan'].isin(fil_kat)]
-        if fil_petugas: df_eks = df_eks[df_eks['petugas'].isin(fil_petugas)]
-        
-        semua_k = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
-        kolom_pilih = st.multiselect("Kolom Laporan:", options=semua_k, default=['waktu_input', 'no_bpjs', 'nama_pasien', 'keluhan', 'solusi', 'status'])
-        
-        df_siap_ekspor = prepare_export_df(df_eks, kolom_pilih)
-        st.write(f"Preview Laporan (Ditemukan **{len(df_siap_ekspor)}** data):")
-        st.dataframe(df_siap_ekspor.head(3), use_container_width=True)
-        
-        dl1, dl2, dl3 = st.columns(3)
-        nm_file = f"Laporan_Spesifik_{datetime.now().strftime('%Y%m%d')}"
-        with dl1: st.download_button("📊 Download Excel", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", type="primary", use_container_width=True)
-        with dl2:
-            try: st.download_button("📝 Download Word", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", type="primary", use_container_width=True)
-            except: pass
-        with dl3:
-            try: st.download_button("📄 Download PDF", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", type="primary", use_container_width=True)
-            except: pass
-
-    # =========================================================
-    # TAB 3: KALENDER LAPORAN INTERAKTIF
-    # =========================================================
-    with tab3:
         st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Laporan Interaktif</h4>", unsafe_allow_html=True)
         df_cal = df_master.copy()
 
@@ -363,12 +318,22 @@ else:
                         if day != 0:
                             current_dt = date(sel_tahun, sel_bulan, day)
                             jumlah_lap = laporan_per_hari.get(current_dt, 0)
-                            btn_label = f"{day}\n({jumlah_lap})" if jumlah_lap > 0 else f"{day}"
-                            btn_type = "primary" if jumlah_lap > 0 else "secondary"
                             
-                            if st.button(btn_label, key=f"cal_btn_{current_dt}", use_container_width=True, type=btn_type):
+                            st.markdown("""
+                            <style>
+                            .btn-cal-has-data > button { background-color: #0ea5e9 !important; color: white !important; font-weight: bold !important; border: none !important; }
+                            .btn-cal-empty > button { background-color: transparent !important; color: #94a3b8 !important; border: 1px dashed #cbd5e1 !important; }
+                            </style>
+                            """, unsafe_allow_html=True)
+                            
+                            btn_label = f"{day}\n({jumlah_lap})" if jumlah_lap > 0 else f"{day}"
+                            btn_class = "btn-cal-has-data" if jumlah_lap > 0 else "btn-cal-empty"
+                            
+                            st.markdown(f"<div class='{btn_class}'>", unsafe_allow_html=True)
+                            if st.button(btn_label, key=f"cal_btn_{current_dt}", use_container_width=True):
                                 st.session_state.cal_selected_date = current_dt
                                 st.rerun() 
+                            st.markdown("</div>", unsafe_allow_html=True)
                         else: st.write("")
 
         with cal_right:
@@ -378,11 +343,10 @@ else:
                 if st.session_state.cal_selected_date:
                     df_table_view = df_table_view[df_table_view['date_only'] == st.session_state.cal_selected_date]
                     st.markdown(f"**Laporan Tanggal: {st.session_state.cal_selected_date}** (Total: {len(df_table_view)})")
-                else:
-                    st.markdown(f"**Semua Laporan Sesuai Filter** (Bulan ini dsb)")
+                else: st.markdown(f"**Semua Laporan Sesuai Filter Kalender**")
                     
             with tb_reset:
-                if st.button("🔄 Reset Pilihan", use_container_width=True):
+                if st.button("🔄 Reset Tgl", use_container_width=True):
                     st.session_state.cal_selected_date = None
                     st.rerun()
 
@@ -393,67 +357,154 @@ else:
             else: st.dataframe(df_table_view, use_container_width=True, hide_index=True)
 
     # =========================================================
-    # TAB 4: MEGA ANALITIK 1000+
+    # TAB 3: MEGA ANALITIK (DENGAN EFEK LOADING ANTI NGEBLANK)
+    # =========================================================
+    with tab3:
+        st.markdown("<h4 style='color:#0f172a;'>📊 Dashboard 10 Metrik Utama Klinik</h4>", unsafe_allow_html=True)
+        
+        # Penambahan Spinner Loading agar tidak blank!
+        with st.spinner("Menggambar Analitik dari 1000+ data..."):
+            df_an = df_master.copy()
+            df_an['Bulan_Tahun'] = df_an['waktu_input_dt'].dt.strftime('%b %Y')
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("1. Total Database", f"{len(df_an)} Pasien")
+            m2.metric("2. Fresh (Masuk 24 Jam)", len(df_an[df_an['Smart_Status'] == 'Baru Masuk']), delta="Normal", delta_color="normal")
+            m3.metric("3. Kasus Overdue", len(df_an[df_an['Smart_Status'] == 'Overdue']), delta="Urgent!", delta_color="inverse")
+            m4.metric("4. Total Diselesaikan", len(df_an[df_an['status'].isin(['Selesai', 'Ditutup'])]))
+            
+            st.markdown("---")
+            cg1, cg2 = st.columns(2)
+            layout_cfg = dict(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(family="Inter", color="#334155"), margin=dict(t=30, b=10, l=10, r=10))
+            
+            with cg1:
+                st.markdown("**5. Tren Kepadatan Laporan per Bulan**")
+                bulan_counts = df_an['Bulan_Tahun'].value_counts().reset_index()
+                bulan_counts.columns = ['Bulan', 'Jumlah']
+                fig_bulan = px.line(bulan_counts, x='Bulan', y='Jumlah', markers=True, color_discrete_sequence=['#ef4444'])
+                fig_bulan.update_layout(**layout_cfg); st.plotly_chart(fig_bulan, use_container_width=True)
+                
+            with cg2:
+                st.markdown("**6. Rasio Kinerja Penanganan**")
+                stat_counts = df_an['Smart_Status'].value_counts().reset_index()
+                stat_counts.columns = ['Status', 'Jumlah']
+                fig_pie = px.pie(stat_counts, values='Jumlah', names='Status', hole=0.4, color_discrete_sequence=['#22c55e', '#ef4444', '#f59e0b', '#3b82f6'])
+                fig_pie.update_layout(**layout_cfg); st.plotly_chart(fig_pie, use_container_width=True)
+                
+            cg3, cg4 = st.columns(2)
+            with cg3:
+                st.markdown("**7. Top 10 Kategori/Keluhan Terbanyak**")
+                df_kat_bersih = df_an[df_an['jenis_laporan'] != '-']
+                kat_c = df_kat_bersih['jenis_laporan'].value_counts().head(10).reset_index()
+                kat_c.columns = ['Kategori', 'Total']
+                fig_bar = px.bar(kat_c, x='Total', y='Kategori', orientation='h', color_discrete_sequence=['#0ea5e9'])
+                fig_bar.update_layout(**layout_cfg, yaxis={'categoryorder':'total ascending'}); st.plotly_chart(fig_bar, use_container_width=True)
+                
+            with cg4:
+                st.markdown("**8. Top 5 Petugas/Dokter Tersibuk**")
+                df_pet = df_an[df_an['petugas'] != '-']
+                pet_c = df_pet['petugas'].value_counts().head(5).reset_index()
+                pet_c.columns = ['Nama Petugas', 'Jumlah Ditangani']
+                fig_pet = px.bar(pet_c, x='Nama Petugas', y='Jumlah Ditangani', color_discrete_sequence=['#8b5cf6'])
+                fig_pet.update_layout(**layout_cfg); st.plotly_chart(fig_pet, use_container_width=True)
+                
+            ct1, ct2 = st.columns(2)
+            with ct1:
+                st.markdown("**9. Top 10 Pasien Paling Sering Lapor**")
+                df_pas = df_an[df_an['nama_pasien'] != '-']
+                pas_c = df_pas['nama_pasien'].value_counts().head(10).reset_index()
+                pas_c.columns = ['Nama Pasien', 'Frekuensi Datang']
+                st.dataframe(pas_c, use_container_width=True, hide_index=True)
+                
+            with ct2:
+                st.markdown("**10. Daftar Keluhan Paling Terbengkalai (Overdue)**")
+                df_overdue = df_an[df_an['Smart_Status'] == 'Overdue'][['waktu_input', 'nama_pasien', 'keluhan']].head(10)
+                df_overdue.columns = ['Tgl Logbook', 'Pasien', 'Keluhan Belum Selesai']
+                st.dataframe(df_overdue, use_container_width=True, hide_index=True)
+
+    # =========================================================
+    # TAB 4: PUSAT EKSPOR & IMPOR DATA (PENGGABUNGAN 2 TAB LAMA)
     # =========================================================
     with tab4:
-        st.markdown("<h4 style='color:#0f172a;'>📊 Dashboard 10 Metrik Utama Klinik</h4>", unsafe_allow_html=True)
-        df_an = df_master.copy()
-        df_an['Bulan_Tahun'] = df_an['waktu_input_dt'].dt.strftime('%b %Y')
+        st.markdown("<h4 style='color:#0f172a;'>📑 Pusat Ekspor & Impor Data Klinik</h4>", unsafe_allow_html=True)
+        st.info("Area terpadu untuk menyaring data yang ingin di-print, melakukan backup seluruh database, atau mengunggah data baru.")
         
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("1. Total Database", f"{len(df_an)} Pasien")
-        m2.metric("2. Fresh (Masuk 24 Jam)", len(df_an[df_an['Smart_Status'] == 'Baru Masuk']), delta="Normal", delta_color="normal")
-        m3.metric("3. Kasus Overdue", len(df_an[df_an['Smart_Status'] == 'Overdue']), delta="Urgent!", delta_color="inverse")
-        m4.metric("4. Total Diselesaikan", len(df_an[df_an['status'].isin(['Selesai', 'Ditutup'])]))
+        # --- BLOK 1: FILTER LAPORAN SPESIFIK ---
+        with st.container(border=True):
+            st.markdown("##### 🔍 1. Ekspor Data Spesifik (PDF / Word / Excel)")
+            df_eks = df_master.copy()
+            
+            f1, f2, f3, f4 = st.columns(4)
+            with f1: fil_tgl = st.date_input("🗓️ Rentang Waktu:", value=())
+            with f2: fil_stat = st.multiselect("🚦 Filter Status:", options=df_eks['status'].unique())
+            with f3: fil_kat = st.multiselect("🩺 Filter Kategori:", options=[k for k in df_eks['jenis_laporan'].unique() if k != '-'])
+            with f4: fil_petugas = st.multiselect("👨‍⚕️ Filter Petugas:", options=[p for p in df_eks['petugas'].unique() if p != '-'])
+            
+            if len(fil_tgl) == 2: df_eks = df_eks[(df_eks['date_only'] >= fil_tgl[0]) & (df_eks['date_only'] <= fil_tgl[1])]
+            elif len(fil_tgl) == 1: df_eks = df_eks[df_eks['date_only'] == fil_tgl[0]]
+            if fil_stat: df_eks = df_eks[df_eks['status'].isin(fil_stat)]
+            if fil_kat: df_eks = df_eks[df_eks['jenis_laporan'].isin(fil_kat)]
+            if fil_petugas: df_eks = df_eks[df_eks['petugas'].isin(fil_petugas)]
+            
+            semua_k = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
+            kolom_pilih = st.multiselect("Kolom Laporan:", options=semua_k, default=['waktu_input', 'no_bpjs', 'nama_pasien', 'keluhan', 'solusi', 'status'])
+            
+            df_siap_ekspor = prepare_export_df(df_eks, kolom_pilih)
+            
+            dl1, dl2, dl3 = st.columns(3)
+            nm_file = f"Laporan_Klinik_{datetime.now().strftime('%Y%m%d')}"
+            with dl1: st.download_button("📊 Buat & Download Excel", create_excel(df_siap_ekspor, "Data"), f"{nm_file}.xlsx", use_container_width=True)
+            with dl2:
+                try: st.download_button("📝 Buat & Download Word", create_word(df_siap_ekspor, "Laporan"), f"{nm_file}.docx", use_container_width=True)
+                except: pass
+            with dl3:
+                try: st.download_button("📄 Buat & Download PDF", create_pdf(df_siap_ekspor, "Laporan"), f"{nm_file}.pdf", mime="application/pdf", use_container_width=True)
+                except: pass
+
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        st.markdown("---")
-        cg1, cg2 = st.columns(2)
-        layout_cfg = dict(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(family="Inter", color="#334155"), margin=dict(t=30, b=10, l=10, r=10))
-        
-        with cg1:
-            st.markdown("**5. Tren Kepadatan Laporan per Bulan**")
-            bulan_counts = df_an['Bulan_Tahun'].value_counts().reset_index()
-            bulan_counts.columns = ['Bulan', 'Jumlah']
-            fig_bulan = px.line(bulan_counts, x='Bulan', y='Jumlah', markers=True, color_discrete_sequence=['#ef4444'])
-            fig_bulan.update_layout(**layout_cfg); st.plotly_chart(fig_bulan, use_container_width=True)
-            
-        with cg2:
-            st.markdown("**6. Rasio Kinerja Penanganan**")
-            stat_counts = df_an['Smart_Status'].value_counts().reset_index()
-            stat_counts.columns = ['Status', 'Jumlah']
-            fig_pie = px.pie(stat_counts, values='Jumlah', names='Status', hole=0.4, color_discrete_sequence=['#22c55e', '#ef4444', '#f59e0b', '#3b82f6'])
-            fig_pie.update_layout(**layout_cfg); st.plotly_chart(fig_pie, use_container_width=True)
-            
-        cg3, cg4 = st.columns(2)
-        with cg3:
-            st.markdown("**7. Top 10 Kategori/Keluhan Terbanyak**")
-            df_kat_bersih = df_an[df_an['jenis_laporan'] != '-']
-            kat_c = df_kat_bersih['jenis_laporan'].value_counts().head(10).reset_index()
-            kat_c.columns = ['Kategori', 'Total']
-            fig_bar = px.bar(kat_c, x='Total', y='Kategori', orientation='h', color_discrete_sequence=['#0ea5e9'])
-            fig_bar.update_layout(**layout_cfg, yaxis={'categoryorder':'total ascending'}); st.plotly_chart(fig_bar, use_container_width=True)
-            
-        with cg4:
-            st.markdown("**8. Top 5 Petugas/Dokter Tersibuk**")
-            df_pet = df_an[df_an['petugas'] != '-']
-            pet_c = df_pet['petugas'].value_counts().head(5).reset_index()
-            pet_c.columns = ['Nama Petugas', 'Jumlah Ditangani']
-            fig_pet = px.bar(pet_c, x='Nama Petugas', y='Jumlah Ditangani', color_discrete_sequence=['#8b5cf6'])
-            fig_pet.update_layout(**layout_cfg); st.plotly_chart(fig_pet, use_container_width=True)
-            
-        ct1, ct2 = st.columns(2)
-        with ct1:
-            st.markdown("**9. Top 10 Pasien Paling Sering Lapor**")
-            df_pas = df_an[df_an['nama_pasien'] != '-']
-            pas_c = df_pas['nama_pasien'].value_counts().head(10).reset_index()
-            pas_c.columns = ['Nama Pasien', 'Frekuensi Datang']
-            st.dataframe(pas_c, use_container_width=True, hide_index=True)
-            
-        with ct2:
-            st.markdown("**10. Daftar Keluhan Paling Terbengkalai (Overdue)**")
-            df_overdue = df_an[df_an['Smart_Status'] == 'Overdue'][['waktu_input', 'nama_pasien', 'keluhan']].head(10)
-            df_overdue.columns = ['Tgl Logbook', 'Pasien', 'Keluhan Belum Selesai']
-            st.dataframe(df_overdue, use_container_width=True, hide_index=True)
+        # --- BLOK 2: MANAJEMEN BACKUP & UPLOAD MASSAL ---
+        c_ex1, c_ex2 = st.columns(2)
+        with c_ex1:
+            with st.container(border=True):
+                st.markdown("##### 📥 2. Impor (Upload) Data Massal ke Sistem")
+                st.warning("Gunakan file template Excel kosong di bawah ini untuk memasukkan ratusan data pasien sekaligus.")
+                template_file = create_template_excel()
+                st.download_button("⬇️ Download Template Excel Kosong", template_file, "Template_Upload_Klinik.xlsx")
+                
+                uploaded_file = st.file_uploader("Upload file Excel yang sudah diisi:", type=['xlsx'])
+                if uploaded_file is not None:
+                    if st.button("🚀 Proses & Masukkan ke Database", use_container_width=True):
+                        try:
+                            df_import = pd.read_excel(uploaded_file)
+                            if 'Nama Pasien' in df_import.columns and 'Keluhan Awal' in df_import.columns:
+                                for index, row in df_import.iterrows():
+                                    if str(row['Nama Pasien']) == 'Contoh Nama': continue
+                                    imp_waktu = str(row['Tanggal Laporan']) if pd.notna(row['Tanggal Laporan']) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    imp_nama = str(row['Nama Pasien']) if pd.notna(row['Nama Pasien']) else ""
+                                    imp_keluhan = str(row['Keluhan Awal']) if pd.notna(row['Keluhan Awal']) else ""
+                                    imp_bpjs = str(row['No. Identitas (BPJS/NIK)']) if pd.notna(row['No. Identitas (BPJS/NIK)']) else ""
+                                    imp_telp = str(row['No. WhatsApp/HP']) if pd.notna(row['No. WhatsApp/HP']) else ""
+                                    imp_kat = str(row['Kategori']) if pd.notna(row['Kategori']) else ""
+                                    imp_solusi = str(row['Tindakan / Solusi']) if pd.notna(row['Tindakan / Solusi']) else ""
+                                    imp_petugas = str(row['Nama Petugas']) if pd.notna(row['Nama Petugas']) else ""
+                                    imp_status = str(row['Status']) if pd.notna(row['Status']) else "Baru"
+                                    if imp_nama and imp_keluhan:
+                                        conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, no_telp, jenis_laporan, keluhan, solusi, petugas, status) VALUES (?,?,?,?,?,?,?,?,?,?)''', (imp_waktu, imp_waktu, imp_bpjs, imp_nama, imp_telp, imp_kat, imp_keluhan, imp_solusi, imp_petugas, imp_status))
+                                conn.commit(); st.success("✅ Impor Data Berhasil!"); st.rerun()
+                            else: st.error("Gagal! Gunakan Template yang disediakan.")
+                        except Exception as e: st.error(f"Error membaca Excel: {e}")
+
+        with c_ex2:
+            with st.container(border=True):
+                st.markdown("##### 📤 3. Backup Seluruh Database Sistem")
+                st.info("Download murni 100% seluruh data historis pasien yang ada di database ke dalam format Excel yang rapi.")
+                try:
+                    cols_to_export = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
+                    df_arsip_rapi = prepare_export_df(df_master, cols_to_export)
+                    excel_file = create_excel(df_arsip_rapi, "Arsip_Klinik")
+                    st.download_button("⬇️ Download Backup Excel Sekarang", excel_file, f"Backup_Full_Klinik_{datetime.now().strftime('%Y%m%d')}.xlsx", type="primary", use_container_width=True)
+                except Exception as e: st.error(f"Gagal memproses file: {e}")
 
     # =========================================================
     # TAB 5: INPUT MANUAL PASIEN BARU
@@ -479,51 +530,9 @@ else:
                 else: st.error("Nama dan Keluhan wajib diisi.")
 
     # =========================================================
-    # TAB 6: MANAJEMEN EXCEL
+    # TAB 6: KONTAK & KATEGORI
     # =========================================================
     with tab6:
-        st.markdown("#### 📑 Pusat Manajemen Data Excel")
-        c_ex1, c_ex2 = st.columns(2)
-        with c_ex1:
-            st.markdown("##### 📤 Ekspor Keseluruhan Data")
-            try:
-                cols_to_export = ['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status']
-                df_arsip_rapi = prepare_export_df(df_master, cols_to_export)
-                excel_file = create_excel(df_arsip_rapi, "Arsip_Klinik")
-                st.download_button("⬇️ Download Excel Sekarang", excel_file, f"Arsip_Klinik.xlsx", type="primary", use_container_width=True)
-            except Exception as e: st.error(f"Gagal memproses file: {e}")
-            
-        with c_ex2:
-            st.markdown("##### 📥 Impor (Upload) Data Buku Log")
-            template_file = create_template_excel()
-            st.download_button("⬇️ Download Template Excel Kosong", template_file, "Template_Upload_Klinik.xlsx")
-            uploaded_file = st.file_uploader("Pilih file Excel yang sudah diisi:", type=['xlsx'])
-            if uploaded_file is not None:
-                if st.button("🚀 Proses & Masukkan ke Database", use_container_width=True):
-                    try:
-                        df_import = pd.read_excel(uploaded_file)
-                        if 'Nama Pasien' in df_import.columns and 'Keluhan Awal' in df_import.columns:
-                            for index, row in df_import.iterrows():
-                                if str(row['Nama Pasien']) == 'Contoh Nama': continue
-                                imp_waktu = str(row['Tanggal Laporan']) if pd.notna(row['Tanggal Laporan']) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                imp_nama = str(row['Nama Pasien']) if pd.notna(row['Nama Pasien']) else ""
-                                imp_keluhan = str(row['Keluhan Awal']) if pd.notna(row['Keluhan Awal']) else ""
-                                imp_bpjs = str(row['No. Identitas (BPJS/NIK)']) if pd.notna(row['No. Identitas (BPJS/NIK)']) else ""
-                                imp_telp = str(row['No. WhatsApp/HP']) if pd.notna(row['No. WhatsApp/HP']) else ""
-                                imp_kat = str(row['Kategori']) if pd.notna(row['Kategori']) else ""
-                                imp_solusi = str(row['Tindakan / Solusi']) if pd.notna(row['Tindakan / Solusi']) else ""
-                                imp_petugas = str(row['Nama Petugas']) if pd.notna(row['Nama Petugas']) else ""
-                                imp_status = str(row['Status']) if pd.notna(row['Status']) else "Baru"
-                                if imp_nama and imp_keluhan:
-                                    conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, no_telp, jenis_laporan, keluhan, solusi, petugas, status) VALUES (?,?,?,?,?,?,?,?,?,?)''', (imp_waktu, imp_waktu, imp_bpjs, imp_nama, imp_telp, imp_kat, imp_keluhan, imp_solusi, imp_petugas, imp_status))
-                            conn.commit(); st.success("✅ Impor Data Berhasil!"); st.rerun()
-                        else: st.error("Gagal! Gunakan Template yang disediakan.")
-                    except Exception as e: st.error(f"Error membaca Excel: {e}")
-
-    # =========================================================
-    # TAB 7: KONTAK & KATEGORI
-    # =========================================================
-    with tab7:
         st.markdown("#### 👥 Database Kontak & Kategori")
         try: st.dataframe(pd.read_sql_query("SELECT * FROM contacts ORDER BY last_interaction_at DESC", conn), use_container_width=True)
         except: pass
