@@ -20,7 +20,7 @@ except ImportError:
 PIN_ADMIN_RAHASIA = "123456" 
 DB_PATH = "klinik_pipp.db"
 
-@st.cache_data(ttl=5) # Cache 5 detik sangkan sistem nyebrot gancangna
+@st.cache_data(ttl=5) # Cache data
 def load_data_from_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     df = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
@@ -32,6 +32,8 @@ def get_conn_write(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 def init_db():
     conn = get_conn_write()
     conn.execute('''CREATE TABLE IF NOT EXISTS pipp (id INTEGER PRIMARY KEY AUTOINCREMENT, waktu_input DATETIME, waktu_selesai DATETIME, no_bpjs TEXT, nama_pasien TEXT, alamat TEXT, no_telp TEXT, jenis_laporan TEXT, keluhan TEXT, solusi TEXT, link_bukti TEXT, is_real INTEGER, contact_id INTEGER, status TEXT DEFAULT 'Baru', priority TEXT DEFAULT 'Normal', short_link TEXT, consent_wa INTEGER DEFAULT 0)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, whatsapp TEXT UNIQUE, bpjs TEXT, nik TEXT, consent_wa INTEGER DEFAULT 0, first_interaction_at DATETIME, last_interaction_at DATETIME)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS main_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT, icon TEXT, deskripsi TEXT, accent TEXT, light TEXT, tipe TEXT, urutan INTEGER)''')
     conn.commit()
 
 def upgrade_db():
@@ -65,7 +67,7 @@ def get_smart_status(status_db, waktu_input_str):
     except: return status_db
 
 # =====================================================================
-# FUNGSI EXPORT (KEBAL ERROR FLOAT)
+# FUNGSI EXPORT (KEBAL ERROR)
 # =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
@@ -82,7 +84,7 @@ def style_excel_sheet(worksheet, dataframe):
         for cell in row: cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 def prepare_export_df(df, cols_to_export):
-    mapping = {'id': 'ID Laporan', 'waktu_input': 'Tgl Laporan', 'nama_pasien': 'Nama Pasien', 'no_bpjs': 'No. BPJS/NIK', 'no_telp': 'WhatsApp', 'alamat': 'Alamat', 'jenis_pasien': 'Jenis Pasien', 'keluhan': 'Keluhan/Diagnosa', 'jenis_laporan': 'Kategori Utama', 'subkategori': 'Subkategori', 'tensi': 'Tensi Darah', 'suhu': 'Suhu Badan', 'solusi': 'Tindakan/Solusi', 'petugas': 'Petugas/Dokter', 'status': 'Status Akhir'}
+    mapping = {'id': 'ID Laporan', 'waktu_input': 'Tgl Laporan', 'nama_pasien': 'Nama Pasien', 'no_bpjs': 'No. BPJS/NIK', 'no_telp': 'WhatsApp', 'alamat': 'Alamat', 'jenis_pasien': 'Jenis Pasien', 'keluhan': 'Keluhan/Diagnosa', 'jenis_laporan': 'Kategori Utama', 'subkategori': 'Subkategori', 'tensi': 'Tensi Darah', 'suhu': 'Suhu Badan', 'solusi': 'Tindakan/Solusi Akhir', 'petugas': 'Petugas/Dokter', 'status': 'Status Akhir'}
     df_eks = df.rename(columns=mapping)
     valid_cols = [mapping.get(c, c) for c in cols_to_export]
     return df_eks[[c for c in valid_cols if c in df_eks.columns]]
@@ -156,23 +158,20 @@ st.markdown("""
     
     .form-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; border-top: 4px solid #0284c7; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
     .penjelasan-box { background-color: #e0f2fe; border-left: 4px solid #0284c7; padding: 12px 15px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; font-size: 13px; color: #0f172a;}
+    div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
     
-    /* TRIK HACKER CSS UNTUK KALENDER: Paksa teks Streamlit Button agar Multi-Baris dan Tidak Terpotong! */
+    /* HACK CSS KALENDER: Agar tombol bisa dienter (baris baru) dan tidak ambigu! */
     div[data-testid="stButton"] button p {
-        white-space: normal !important; 
-        overflow: visible !important; 
-        word-wrap: break-word !important;
-        text-overflow: clip !important;
+        white-space: pre-wrap !important; /* MENGIZINKAN ENTER / BARIS BARU */
+        text-align: center !important;
+        line-height: 1.4 !important;
     }
     
     /* Tombol Kalender */
-    .btn-cal-has-data > div > button { background-color: #e0f2fe !important; border: 2px solid #0284c7 !important; border-radius: 8px !important; padding: 5px !important; height: 100% !important; min-height: 70px !important;}
-    .btn-cal-has-data > div > button p { color: #0f172a !important; font-weight: bold !important; font-size: 15px !important; line-height: 1.2 !important; }
-    .btn-cal-empty > div > button { background-color: transparent !important; border: 1px dashed #cbd5e1 !important; border-radius: 8px !important; padding: 5px !important; height: 100% !important; min-height: 70px !important; }
+    .btn-cal-has-data > div > button { background-color: #f0f9ff !important; border: 2px solid #0284c7 !important; border-radius: 8px !important; height: 100% !important; min-height: 65px !important;}
+    .btn-cal-has-data > div > button p { color: #0f172a !important; font-weight: bold !important; font-size: 14px !important; }
+    .btn-cal-empty > div > button { background-color: transparent !important; border: 1px dashed #cbd5e1 !important; border-radius: 8px !important; height: 100% !important; min-height: 65px !important; }
     .btn-cal-empty > div > button p { color: #94a3b8 !important; font-size: 14px !important; }
-    
-    /* Tombol Submit */
-    div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -201,7 +200,7 @@ else:
     
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🚀 Kelola Pasien & Histori", 
-        "📅 Kalender Laporan Instan", # Tab kalender
+        "📅 Kalender Laporan", 
         "📊 Analisis 10 Statistik Nyata", 
         "📑 Pusat Ekspor & Impor", 
         "✍️ Input Manual", 
@@ -280,11 +279,11 @@ else:
             conn.commit(); st.cache_data.clear(); st.success("Pembaruan tersimpan!"); st.rerun()
 
     # =========================================================
-    # TAB 2: KALENDER INTERAKTIF (BISA DIKLIK, TIDAK TERPOTONG, CEPAT)
+    # TAB 2: KALENDER INTERAKTIF (PERBAIKAN TAMPILAN & SPEED)
     # =========================================================
     with tab2:
         st.markdown("<h4 style='color:#0f172a;'>📅 Kalender Pemantauan Laporan</h4>", unsafe_allow_html=True)
-        st.info("Klik tombol tanggal di kalender untuk memunculkan detail rincian data di tabel sebelah kanan. Cepat dan instan.")
+        st.info("Klik tombol tanggal di kalender untuk memunculkan detail rincian data di tabel sebelah kanan. Dijamin cepat dan instan!")
         
         df_cal = df_master.copy()
 
@@ -311,7 +310,7 @@ else:
         laporan_per_hari = df_fil_cal.groupby('date_only').size().to_dict()
         st.markdown("---")
         
-        # LAYOUT: Kalender Kiri (Ukuran Pas), Tabel Kanan
+        # LAYOUT: Kalender Kiri (Lebar), Tabel Kanan
         cal_left, cal_right = st.columns([1.3, 1.7], gap="large")
         
         with cal_left:
@@ -332,7 +331,7 @@ else:
             for i, day_name in enumerate(days_header):
                 cols_hdr[i].markdown(f"<div style='text-align:center; font-weight:bold; color:#475569; font-size:13px; padding-bottom:5px;'>{day_name}</div>", unsafe_allow_html=True)
             
-            # GRID TOMBOL KALENDER NATIVE (Sudah di-Hack CSS-nya agar teks full multi-baris)
+            # GRID TOMBOL KALENDER NATIVE (CSS HACKED AGAR TEKS BARIS BARU)
             cal_matrix = calendar.monthcalendar(sel_tahun, sel_bulan)
             for week in cal_matrix:
                 cols_week = st.columns(7)
@@ -342,14 +341,17 @@ else:
                             current_dt = date(sel_tahun, sel_bulan, day)
                             jumlah_lap = laporan_per_hari.get(current_dt, 0)
                             
-                            # Label Jelas, Misal: 12 \n 5 Lap.
-                            btn_label = f"{day}\n{jumlah_lap} Lap" if jumlah_lap > 0 else f"{day}"
+                            # FORMAT JELAS ANTI-AMBIGU: Tgl 3 \n (5 Data)
+                            btn_label = f"Tgl {day}\n({jumlah_lap} Data)" if jumlah_lap > 0 else f"{day}"
                             btn_class = "btn-cal-has-data" if jumlah_lap > 0 else "btn-cal-empty"
                             
                             st.markdown(f"<div class='{btn_class}'>", unsafe_allow_html=True)
+                            
+                            # OPTIMASI ANTI-LEMOT: st.rerun() DIHAPUS. Cukup set state saja!
                             if st.button(btn_label, key=f"cal_btn_{current_dt}", use_container_width=True):
                                 st.session_state.cal_selected_date = current_dt
-                                st.rerun() 
+                                # st.rerun() DIHAPUS DARI SINI AGAR TIDAK DOUBLE-LOADING (INSTAN)
+                                
                             st.markdown("</div>", unsafe_allow_html=True)
                         else: st.write("")
 
@@ -366,11 +368,11 @@ else:
             with tb_reset:
                 if st.button("🔄 Reset Tgl", use_container_width=True):
                     st.session_state.cal_selected_date = None
-                    st.rerun()
+                    st.rerun() # Rerun di sini aman karena cuma reset filter
 
             df_table_view = df_table_view[['id', 'waktu_input', 'nama_pasien', 'keluhan', 'Smart_Status', 'petugas']].rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Pasien', 'keluhan':'Keluhan', 'Smart_Status':'Status', 'petugas':'Petugas'})
             
-            if df_table_view.empty: st.info("Pilih tanggal di kalender yang memiliki indikator laporan.")
+            if df_table_view.empty: st.info("Pilih tanggal di kalender yang memiliki indikator laporan (warna biru).")
             else: st.dataframe(df_table_view, use_container_width=True, hide_index=True)
 
     # =========================================================
@@ -407,7 +409,7 @@ else:
             fig_bulan.update_layout(**layout_cfg); st.plotly_chart(fig_bulan, use_container_width=True)
             try: bln_sibuk = bulan_counts.iloc[0]['Bulan']; jlh_sibuk = bulan_counts.iloc[0]['Jumlah']
             except: bln_sibuk = "-"; jlh_sibuk = 0
-            st.markdown(f"<div class='penjelasan-box'><b>Fakta Database:</b> Data tertinggi sistem jatuh pada bulan <b>{bln_sibuk}</b> dengan lonjakan sebanyak {jlh_sibuk} laporan. Angka ini secara absolut membaca jumlah baris data yang tanggal inputnya jatuh pada bulan tersebut.</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='penjelasan-box'><b>Fakta Database:</b> Data tertinggi sistem jatuh pada bulan <b>{bln_sibuk}</b> dengan lonjakan sebanyak {jlh_sibuk} laporan. Angka ini secara absolut membaca jumlah baris data yang tanggal inputnya jatuh pada bulan tersebut di dalam file .db Anda.</div>", unsafe_allow_html=True)
             
         with cg2:
             st.markdown("#### 6. Komparasi Status Penanganan")
@@ -427,7 +429,7 @@ else:
             kat_c.columns = ['Kategori', 'Total']
             fig_bar_k = px.bar(kat_c, x='Total', y='Kategori', orientation='h', color_discrete_sequence=['#0ea5e9'])
             fig_bar_k.update_layout(yaxis={'categoryorder':'total ascending'}, **layout_cfg); st.plotly_chart(fig_bar_k, use_container_width=True)
-            st.markdown(f"<div class='penjelasan-box'><b>Fakta Database:</b> Kasus <b>'{kat_c.iloc[0]['Kategori']}'</b> mendominasi laporan. Perhatikan bahwa grafik ini secara transparan juga menghitung baris data yang belum memiliki kategori (KOSONG).</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='penjelasan-box'><b>Fakta Database:</b> Kasus <b>'{kat_c.iloc[0]['Kategori']}'</b> mendominasi komplain. Perhatikan bahwa grafik ini secara transparan juga menghitung baris data yang belum memiliki kategori (KOSONG), sehingga Admin dapat segera melengkapinya.</div>", unsafe_allow_html=True)
 
         with cg4:
             st.markdown("#### 8. Evaluasi Beban Tugas Petugas")
@@ -515,6 +517,7 @@ else:
                                     if imp_nama and imp_keluhan:
                                         conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, no_telp, jenis_laporan, keluhan, solusi, petugas, status) VALUES (?,?,?,?,?,?,?,?,?,?)''', (imp_waktu, imp_waktu, imp_bpjs, imp_nama, imp_telp, imp_kat, imp_keluhan, imp_solusi, imp_petugas, imp_status))
                                 conn.commit(); st.cache_data.clear(); st.success("✅ Impor Data Berhasil!"); st.rerun()
+                            else: st.error("Gagal! Gunakan template excel yang disediakan.")
                         except Exception as e: st.error(f"Error membaca Excel: {e}")
 
         with c_ex2:
