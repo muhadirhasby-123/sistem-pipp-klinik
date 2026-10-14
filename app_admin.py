@@ -22,13 +22,6 @@ PIN_ADMIN_RAHASIA = "123456"
 DB_PATH = "klinik_pipp.db"
 TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- Pastikan token Telegram aman
 
-@st.cache_data(ttl=2) 
-def load_data_from_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    df = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
-    conn.close()
-    return df
-
 def get_conn_write(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
@@ -66,17 +59,34 @@ def clean_text(text):
     if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']: return '-'
     return str(text)
 
-def get_smart_status(status_db, waktu_input_str):
-    try:
-        tgl_logbook = pd.to_datetime(waktu_input_str)
-        batas_24_jam = datetime.now() - timedelta(days=1)
-        if status_db == 'Baru':
-            if tgl_logbook >= batas_24_jam: return "Baru Masuk"
-            else: return "Overdue"
-        return status_db
-    except: return status_db
+@st.cache_data(ttl=2) 
+def get_prepared_data():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    df = pd.read_sql_query("SELECT * FROM pipp ORDER BY id DESC", conn).fillna('')
+    conn.close()
+    
+    if df.empty: return df
+    
+    kata_kotor = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']
+    cols_to_clean = ['nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'keluhan', 'jenis_laporan', 'subkategori', 'solusi', 'petugas']
+    for c in cols_to_clean:
+        if c in df.columns: df[c] = df[c].replace(kata_kotor, '-')
+            
+    df['waktu_input_dt'] = pd.to_datetime(df['waktu_input'], errors='coerce')
+    df['date_only'] = df['waktu_input_dt'].dt.date
+    
+    batas_24_jam = datetime.now() - timedelta(days=1)
+    df['Smart_Status'] = df['status']
+    is_baru = df['status'] == 'Baru'
+    is_fresh = df['waktu_input_dt'] >= batas_24_jam
+    df.loc[is_baru & is_fresh, 'Smart_Status'] = 'Baru Masuk'
+    df.loc[is_baru & ~is_fresh, 'Smart_Status'] = 'Overdue'
+    
+    return df
 
+# =====================================================================
 # FUNGSI KALENDER HTML MURNI
+# =====================================================================
 def generate_html_calendar(year, month, data_dict):
     cal = calendar.monthcalendar(year, month)
     html = "<table style='width:100%; table-layout:fixed; border-collapse:collapse; text-align:center; font-family:Inter, sans-serif; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 20px;'>"
@@ -96,7 +106,9 @@ def generate_html_calendar(year, month, data_dict):
     html += "</table>"
     return html
 
+# =====================================================================
 # FUNGSI EXPORT (DIPERBARUI DENGAN IDENTITAS BPJS)
+# =====================================================================
 def style_excel_sheet(worksheet, dataframe):
     header_fill = PatternFill(start_color="0f172a", end_color="0f172a", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
@@ -206,7 +218,9 @@ st.markdown("""
     .badge-proses { background-color: #fef9c3; color: #854d0e; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 11px; }
     
     .form-container { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; border-top: 4px solid #0284c7; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-    .penjelasan-box { background-color: #e0f2fe; border-left: 4px solid #0284c7; padding: 12px 15px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; font-size: 13px; color: #0f172a;}
+    .insight-box { background-color: #f0fdf4; border-left: 4px solid #16a34a; padding: 15px; margin-top: 15px; margin-bottom: 15px; border-radius: 4px; font-size: 13.5px; color: #334155; box-shadow: 0 1px 2px rgba(0,0,0,0.05);}
+    .warning-box { background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 15px; margin-top: 20px; border-radius: 4px; font-size: 12.5px; color: #7f1d1d;}
+    
     div[data-testid="stFormSubmitButton"] > button { background: #0ea5e9 !important; color: white !important; font-weight: bold !important; border-radius: 6px !important; transition: all 0.2s !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -220,16 +234,7 @@ if not st.session_state.admin_logged_in:
         if st.button("Masuk"): 
             if st.text_input("PIN", type="password") == PIN_ADMIN_RAHASIA: st.session_state.admin_logged_in = True; st.rerun()
 else:
-    df_raw = load_data_from_db()
-    df_master = df_raw.copy()
-    
-    df_master['waktu_input_dt'] = pd.to_datetime(df_master['waktu_input'], errors='coerce')
-    df_master['date_only'] = df_master['waktu_input_dt'].dt.date
-    
-    kata_kotor = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']
-    cols_to_clean = ['nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'keluhan', 'jenis_laporan', 'subkategori', 'solusi', 'petugas']
-    df_master[cols_to_clean] = df_master[cols_to_clean].replace(kata_kotor, '-')
-    df_master['Smart_Status'] = df_master.apply(lambda row: get_smart_status(row['status'], row['waktu_input']), axis=1)
+    df_master = get_prepared_data()
 
     st.markdown("<h2 style='color:#0f172a; margin-top: -20px;'>🏥 Dashboard Klinik Pratama Papan Mas</h2>", unsafe_allow_html=True)
     
@@ -238,7 +243,7 @@ else:
         "📅 Kalender HTML Laporan", 
         "📊 Mega Analitik Historis", 
         "📑 Pusat Ekspor & Impor", 
-        "✍️ Input Manual", 
+        "✍️ Input Data Baru", 
         "👥 Interaksi & Kategori"
     ])
 
@@ -362,246 +367,246 @@ else:
         st.dataframe(df_table_view, use_container_width=True, hide_index=True)
 
     # =========================================================
-    # TAB 3: MEGA ANALITIK 1000+ (FOKUS INTEGRITAS & HISTORIS)
+    # TAB 3: MEGA ANALITIK (SESUAI WIREFRAME REVISI)
     # =========================================================
     with tab3:
+        # Inisialisasi Session State Drill-Down
         if "ana_drill_col" not in st.session_state: st.session_state.ana_drill_col = None
         if "ana_drill_val" not in st.session_state: st.session_state.ana_drill_val = None
         
-        st.markdown("<h4 style='color:#0f172a;'>📊 Mega Analitik: Dokumentasi Laporan Historis</h4>", unsafe_allow_html=True)
-        
         df_an = df_master.copy()
-        kata_kosong = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None', 'KOSONG (Tanpa Petugas)', 'KOSONG (Belum Diklasifikasi)']
-        
-        cols_check = ['nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi', 'petugas']
+        # Normalisasi String Kosong
+        kata_kosong = ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']
+        cols_check = ['nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi']
         for c in cols_check:
             if c in df_an.columns: df_an[c] = df_an[c].replace(kata_kosong, 'KOSONG')
         
-        # =======================================================
-        # FILTER TANGGAL GLOBAL
-        # =======================================================
-        st.markdown("##### 🗓️ Filter Tanggal Historis Global")
-        col_f1, col_f2 = st.columns([3, 1])
+        try: min_d = df_an['date_only'].min().strftime('%d %b %Y'); max_d = df_an['date_only'].max().strftime('%d %b %Y')
+        except: min_d = "-"; max_d = "-"
+        
+        st.markdown("#### ⚙️ Filter Global & Status Data")
+        st.markdown(f"**🗓️ Rentang Tanggal Historis:** {min_d} hingga {max_d}")
+        
+        # Filter Tanggal Global
+        col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
-            try: min_d = df_an['date_only'].min(); max_d = df_an['date_only'].max()
-            except: min_d = datetime.now().date(); max_d = datetime.now().date()
-            tgl_global = st.date_input(f"Rentang Waktu Database ({min_d} s.d {max_d}):", value=(), key="ana_tgl_global")
+            tgl_global = st.date_input("Date Input Range: Filter Global", value=(), key="ana_tgl_global")
         with col_f2:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🔄 Reset Tanggal Global", use_container_width=True):
-                st.session_state.ana_drill_col = None; st.session_state.ana_drill_val = None; st.rerun()
+            cf1, cf2 = st.columns(2)
+            with cf1:
+                if st.button("🔄 Reset Tanggal Global", use_container_width=True):
+                    st.session_state.ana_drill_col = None; st.session_state.ana_drill_val = None; st.rerun()
+            with cf2:
+                if st.button("❌ Hapus Drill-Down", use_container_width=True):
+                    st.session_state.ana_drill_col = None; st.session_state.ana_drill_val = None; st.rerun()
 
+        # Eksekusi Filter Global
         df_filtered = df_an.copy()
         if len(tgl_global) == 2: df_filtered = df_filtered[(df_filtered['date_only'] >= tgl_global[0]) & (df_filtered['date_only'] <= tgl_global[1])]
         elif len(tgl_global) == 1: df_filtered = df_filtered[df_filtered['date_only'] == tgl_global[0]]
         
         total_db = len(df_an)
         total_filtered = len(df_filtered)
+        is_drill_active = st.session_state.ana_drill_col is not None
+        
+        # Eksekusi Detail Tabel Simulasi Drilldown untuk count
+        df_drilldown = df_filtered.copy()
+        if is_drill_active:
+            col_filter = st.session_state.ana_drill_col
+            val_filter = st.session_state.ana_drill_val
+            if col_filter == "Periode_Bulan_Str":
+                df_drilldown['Periode_Bulan_Str'] = df_drilldown['waktu_input_dt'].dt.to_period('M').astype(str)
+                df_drilldown = df_drilldown[df_drilldown['Periode_Bulan_Str'] == val_filter]
+            elif col_filter == "nama_clean":
+                df_drilldown['nama_clean'] = df_drilldown['nama_pasien'].str.lower().str.strip()
+                df_drilldown = df_drilldown[df_drilldown['nama_clean'] == val_filter]
+            else:
+                df_drilldown = df_drilldown[df_drilldown[col_filter] == val_filter]
+                
+        total_drilldown = len(df_drilldown)
+
+        st.info(f"**Indikator Data:**\n🗄️ Total Seluruh Database: **{total_db}** laporan\n📅 Total Setelah Filter Tanggal: **{total_filtered}** laporan\n🔍 Total Setelah Drill-Down: **{total_drilldown}** laporan")
 
         # =======================================================
         # BAGIAN A: Ringkasan Utama & Kualitas Data
         # =======================================================
-        st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-        st.markdown("#### Bagian A — Ringkasan Utama & Kualitas Data")
+        st.markdown("<hr style='margin: 20px 0;'>", unsafe_allow_html=True)
+        st.markdown("#### Bagian A: Ringkasan Utama & Kualitas Data")
         
         jml_sol_kosong = len(df_filtered[df_filtered['solusi'] == 'KOSONG'])
         pct_sol_kosong = round((jml_sol_kosong / total_filtered * 100), 1) if total_filtered > 0 else 0
-        
         jml_audit = len(df_filtered[df_filtered['is_audited'] == 1])
         pct_audit = round((jml_audit / total_filtered * 100), 1) if total_filtered > 0 else 0
-        
         jml_id_terisi = len(df_filtered[df_filtered['no_bpjs'] != 'KOSONG'])
-        pct_id = round((jml_id_terisi / total_filtered * 100), 1) if total_filtered > 0 else 0
+        pct_identitas = round((jml_id_terisi / total_filtered * 100), 1) if total_filtered > 0 else 0
         
         ka1, ka2, ka3, ka4 = st.columns(4)
-        ka1.metric("1. Total Laporan (Terfilter)", f"{total_filtered} Data")
-        ka2.metric("2. Dok. Solusi Kosong", f"{jml_sol_kosong}", f"{pct_sol_kosong}% dari total", delta_color="inverse")
-        ka3.metric("3. Progres Audit Historis", f"{jml_audit} Data", f"{pct_audit}% Dicentang")
-        ka4.metric("4. Kelengkapan Identitas", f"{jml_id_terisi} Data", f"{pct_id}% Terisi NIK/BPJS")
+        ka1.metric("Total Laporan (Terfilter)", f"{total_filtered} Data")
+        ka2.metric("Dokumentasi Solusi Kosong", f"{jml_sol_kosong}", f"({pct_sol_kosong}%)", delta_color="inverse")
+        ka3.metric("Progres Audit Historis", f"{pct_audit}%", f"{jml_audit} Divalidasi")
+        ka4.metric("Kelengkapan Identitas", f"{pct_identitas}%", "Ada NIK/BPJS")
         
-        st.markdown(f"<div class='penjelasan-box'><b>Insight Kondisi Data:</b> Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem (Catatan: ini hanya menunjukkan ketiadaan teks dokumentasi, bukan bukti pasti laporan tidak ditangani di lapangan). Di sisi lain, persentase audit validasi logbook baru menyentuh {pct_audit}%, dan kelengkapan pengisian kolom NIK/BPJS mencapai {pct_id}%. Angka identitas menunjukkan eksistensi teks, bukan hasil verifikasi ke server BPJS.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KONDISI DATA:</b><br>Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem (Catatan: ini hanya menunjukkan ketiadaan teks dokumentasi, bukan bukti laporan tidak ditangani). Di sisi lain, kelengkapan pengisian NIK/BPJS mencapai {pct_identitas}%.</div>", unsafe_allow_html=True)
 
         # =======================================================
-        # BAGIAN B: Tren dan Pola Waktu
+        # BAGIAN B: Tren dan Pola Waktu Pencatatan
         # =======================================================
-        st.markdown("<hr style='margin: 15px 0;'>", unsafe_allow_html=True)
-        st.markdown("#### Bagian B — Tren dan Pola Waktu Pencatatan")
-        layout_cfg = dict(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(family="Inter", color="#334155"), margin=dict(t=30, b=10, l=10, r=10))
+        st.markdown("<hr style='margin: 20px 0;'>", unsafe_allow_html=True)
+        st.markdown("#### Bagian B: Tren dan Pola Waktu Pencatatan")
         
+        layout_cfg = dict(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(family="Inter", color="#334155"), margin=dict(t=20, b=10, l=10, r=10))
         cb1, cb2 = st.columns(2)
+        
+        bln_puncak = "-"
+        jml_puncak_bln = 0
+        hr_puncak = "-"
+        
         with cb1:
-            st.markdown("**5. Tren Pencatatan Bulanan (Kronologis)**")
             if total_filtered > 0:
                 df_filtered['Periode_Bulan'] = df_filtered['waktu_input_dt'].dt.to_period('M')
                 tren_bulan = df_filtered['Periode_Bulan'].value_counts().sort_index().reset_index()
                 tren_bulan.columns = ['Bulan', 'Jumlah']
                 tren_bulan['Bulan_Str'] = tren_bulan['Bulan'].astype(str)
-                fig_bulan = px.line(tren_bulan, x='Bulan_Str', y='Jumlah', markers=True, color_discrete_sequence=['#ef4444'])
-                fig_bulan.update_layout(**layout_cfg); st.plotly_chart(fig_bulan, use_container_width=True)
                 
-                bln_max = tren_bulan.loc[tren_bulan['Jumlah'].idxmax()]['Bulan_Str']
-                jml_max = tren_bulan['Jumlah'].max()
-                st.markdown(f"<div class='penjelasan-box'><b>Insight Pola Waktu:</b> Pencatatan data logbook tertinggi terjadi pada bulan <b>{bln_max}</b> sebanyak {jml_max} data. Penyebab lonjakan atau penurunan ini tidak dapat disimpulkan murni dari database tanpa penelusuran lebih lanjut.</div>", unsafe_allow_html=True)
+                fig_bulan = px.line(tren_bulan, x='Bulan_Str', y='Jumlah', markers=True, color_discrete_sequence=['#ef4444'], title="Grafik Tren Pencatatan Bulanan")
+                fig_bulan.update_layout(**layout_cfg)
+                fig_bulan.update_xaxes(title_text="Bulan (Kronologis)")
+                fig_bulan.update_yaxes(title_text="Jumlah Laporan Tercatat")
+                st.plotly_chart(fig_bulan, use_container_width=True)
                 
-                if st.button(f"🔍 Drill-Down: Lihat Laporan Bulan {bln_max}", use_container_width=True):
-                    st.session_state.ana_drill_col = "Periode_Bulan_Str"
-                    st.session_state.ana_drill_val = bln_max
-                    st.rerun()
-            else: st.info("Data waktu tidak tersedia pada periode ini.")
+                if not tren_bulan.empty:
+                    bln_puncak = tren_bulan.loc[tren_bulan['Jumlah'].idxmax()]['Bulan_Str']
+                    jml_puncak_bln = tren_bulan['Jumlah'].max()
+            else: st.info("Data bulanan tidak tersedia.")
             
         with cb2:
-            st.markdown("**6. Pola Hari Pencatatan Tersibuk**")
             if total_filtered > 0:
                 df_filtered['Hari'] = df_filtered['waktu_input_dt'].dt.day_name().map({'Monday':'Senin', 'Tuesday':'Selasa', 'Wednesday':'Rabu', 'Thursday':'Kamis', 'Friday':'Jumat', 'Saturday':'Sabtu', 'Sunday':'Minggu'})
                 hari_c = df_filtered['Hari'].value_counts().reindex(['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']).fillna(0).reset_index()
                 hari_c.columns = ['Hari', 'Jumlah']
-                fig_hari = px.bar(hari_c, x='Hari', y='Jumlah', color_discrete_sequence=['#8b5cf6'])
-                fig_hari.update_layout(**layout_cfg); st.plotly_chart(fig_hari, use_container_width=True)
                 
-                hr_max = hari_c.loc[hari_c['Jumlah'].idxmax()]['Hari']
-                st.markdown(f"<div class='penjelasan-box'><b>Insight Pola Hari:</b> Secara historis, <b>{hr_max}</b> merupakan hari dengan frekuensi pencatatan laporan terbanyak.</div>", unsafe_allow_html=True)
-            else: st.info("Data hari tidak tersedia.")
+                fig_hari = px.bar(hari_c, x='Hari', y='Jumlah', color_discrete_sequence=['#8b5cf6'], title="Pola Hari Pencatatan")
+                fig_hari.update_layout(**layout_cfg)
+                fig_hari.update_xaxes(title_text="Senin -> Minggu")
+                fig_hari.update_yaxes(title_text="Total Laporan")
+                st.plotly_chart(fig_hari, use_container_width=True)
+                
+                if not hari_c.empty:
+                    hr_puncak = hari_c.loc[hari_c['Jumlah'].idxmax()]['Hari']
+            else: st.info("Data harian tidak tersedia.")
+            
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA WAKTU:</b><br>Pencatatan data tertinggi berada pada bulan {bln_puncak} sebanyak {jml_puncak_bln} data. Untuk pola mingguan, {hr_puncak} adalah hari dengan volume pencatatan paling banyak. Penyebab lonjakan atau penurunan ini belum dapat disimpulkan murni dari data historis.</div>", unsafe_allow_html=True)
+        if bln_puncak != "-" and st.button(f"🔍 Tampilkan Laporan di Bulan {bln_puncak} pada Bagian E", use_container_width=True):
+            st.session_state.ana_drill_col = "Periode_Bulan_Str"
+            st.session_state.ana_drill_val = bln_puncak
+            st.rerun()
 
         # =======================================================
         # BAGIAN C: Pasien dan Pola Keluhan
         # =======================================================
-        st.markdown("<hr style='margin: 15px 0;'>", unsafe_allow_html=True)
-        st.markdown("#### Bagian C — Pasien dan Pola Keluhan")
+        st.markdown("<hr style='margin: 20px 0;'>", unsafe_allow_html=True)
+        st.markdown("#### Bagian C: Pasien dan Pola Keluhan")
         
         cc1, cc2 = st.columns(2)
+        pas_terbanyak = "-"
+        jml_pas_terbanyak = 0
+        kel_terbanyak = "-"
+        
         with cc1:
-            st.markdown("**7. Top 10 Nama Paling Sering Tercatat**")
+            st.markdown("**Top 10 Nama Paling Sering**")
             if total_filtered > 0:
                 df_pas = df_filtered[df_filtered['nama_pasien'] != 'KOSONG'].copy()
                 df_pas['nama_clean'] = df_pas['nama_pasien'].str.lower().str.strip()
                 pas_c = df_pas['nama_clean'].value_counts().head(10).reset_index()
-                pas_c.columns = ['Nama Pasien (Lower)', 'Total Kunjungan']
+                pas_c.columns = ['Nama Tercatat', 'Jumlah Kemunculan']
                 st.dataframe(pas_c, use_container_width=True, hide_index=True)
-                
                 if not pas_c.empty:
-                    top_pas = pas_c.iloc[0]['Nama Pasien (Lower)']
-                    st.markdown(f"<div class='penjelasan-box'><b>Insight Pasien:</b> Teks nama yang paling sering tercatat adalah '{top_pas}' ({pas_c.iloc[0]['Total Kunjungan']} kali). <i>Keterbatasan: Sistem menormalisasi huruf kecil, namun kesalahan ketik ejaan tetap dihitung sebagai nama yang berbeda. Ini bukan klaim mutlak kepemilikan individu tanpa NIK yang identik.</i></div>", unsafe_allow_html=True)
-                    if st.button(f"🔍 Drill-Down: Riwayat '{top_pas}'", use_container_width=True):
-                        st.session_state.ana_drill_col = "nama_clean"
-                        st.session_state.ana_drill_val = top_pas
-                        st.rerun()
+                    pas_terbanyak = pas_c.iloc[0]['Nama Tercatat']
+                    jml_pas_terbanyak = pas_c.iloc[0]['Jumlah Kemunculan']
             else: st.info("Data pasien kosong.")
 
         with cc2:
-            st.markdown("**8. Top 10 Teks Keluhan Mentah Paling Muncul**")
+            st.markdown("**Top 10 Teks Keluhan Mentah**")
             if total_filtered > 0:
                 df_kel = df_filtered[df_filtered['keluhan'] != 'KOSONG']
                 kel_c = df_kel['keluhan'].value_counts().head(10).reset_index()
                 kel_c.columns = ['Teks Keluhan Asli', 'Jumlah Ditemukan']
                 st.dataframe(kel_c, use_container_width=True, hide_index=True)
-                
                 if not kel_c.empty:
-                    top_kel = kel_c.iloc[0]['Teks Keluhan Asli']
-                    st.markdown(f"<div class='penjelasan-box'><b>Insight Keluhan:</b> Teks keluhan mentah yang paling banyak diketik berulang kali adalah '{top_kel}' ({kel_c.iloc[0]['Jumlah Ditemukan']} kali). <i>Keterbatasan: Ini menggunakan pencocokan teks persis.</i></div>", unsafe_allow_html=True)
-                    if st.button(f"🔍 Drill-Down: Laporan Keluhan '{top_kel[:15]}...'", use_container_width=True):
-                        st.session_state.ana_drill_col = "keluhan"
-                        st.session_state.ana_drill_val = top_kel
-                        st.rerun()
+                    kel_terbanyak = kel_c.iloc[0]['Teks Keluhan Asli']
             else: st.info("Data keluhan kosong.")
+            
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA PASIEN & KELUHAN:</b><br>Nama yang paling sering tercatat adalah '{pas_terbanyak}' dengan {jml_pas_terbanyak} kemunculan. Teks keluhan mentah yang paling banyak diketik adalah '{kel_terbanyak}'.<br>Keterbatasan: Sistem menggunakan pencocokan teks persis. Variasi ejaan (misal 'Sri Rahayu' vs 'sri rahayu') atau kesalahan ketik dihitung terpisah, sehingga tidak bisa diklaim mutlak sebagai individu yang sama tanpa validasi NIK.</div>", unsafe_allow_html=True)
+        if pas_terbanyak != "-" and st.button(f"🔍 Tampilkan Riwayat Nama '{pas_terbanyak}' pada Bagian E", use_container_width=True):
+            st.session_state.ana_drill_col = "nama_clean"
+            st.session_state.ana_drill_val = pas_terbanyak
+            st.rerun()
 
         # =======================================================
         # BAGIAN D: Kualitas & Distribusi Klasifikasi Data
         # =======================================================
-        st.markdown("<hr style='margin: 15px 0;'>", unsafe_allow_html=True)
-        st.markdown("#### Bagian D — Kualitas dan Distribusi Klasifikasi")
+        st.markdown("<hr style='margin: 20px 0;'>", unsafe_allow_html=True)
+        st.markdown("#### Bagian D: Kualitas & Distribusi Klasifikasi Data")
         
         cd1, cd2 = st.columns(2)
+        kat_terbanyak = "-"
+        jml_kat_kosong = 0
+        
         with cd1:
-            st.markdown("**9. Distribusi Kategori Laporan**")
             if total_filtered > 0:
                 kat_c = df_filtered['jenis_laporan'].value_counts().reset_index()
                 kat_c.columns = ['Kategori', 'Total']
                 kat_c['Warna'] = kat_c['Kategori'].apply(lambda x: '#cbd5e1' if x == 'KOSONG' else '#0ea5e9')
                 
-                fig_kat = px.bar(kat_c.head(10), x='Total', y='Kategori', orientation='h', color='Warna', color_discrete_map="identity")
+                fig_kat = px.bar(kat_c.head(10), x='Total', y='Kategori', orientation='h', color='Warna', color_discrete_map="identity", title="Distribusi Kategori Valid")
                 fig_kat.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, **layout_cfg)
                 st.plotly_chart(fig_kat, use_container_width=True)
                 
                 jml_kat_kosong = len(df_filtered[df_filtered['jenis_laporan'] == 'KOSONG'])
-                st.markdown(f"<div class='penjelasan-box'><b>Insight Klasifikasi:</b> Grafik menampilkan 10 kategori terbanyak. Terdapat {jml_kat_kosong} laporan yang belum dikategorikan (KOSONG - bar warna abu-abu).</div>", unsafe_allow_html=True)
-                if jml_kat_kosong > 0 and st.button("🔍 Drill-Down: Tampilkan Laporan Tanpa Kategori", use_container_width=True):
-                    st.session_state.ana_drill_col = "jenis_laporan"
-                    st.session_state.ana_drill_val = "KOSONG"
-                    st.rerun()
+                kat_valid = kat_c[kat_c['Kategori'] != 'KOSONG']
+                if not kat_valid.empty: kat_terbanyak = kat_valid.iloc[0]['Kategori']
             else: st.info("Data klasifikasi kosong.")
 
         with cd2:
-            st.markdown("**10. Evaluasi Kelengkapan Bar**")
             if total_filtered > 0:
                 p_id = round((len(df_filtered[df_filtered['no_bpjs'] != 'KOSONG']) / total_filtered * 100), 1)
                 p_kel = round((len(df_filtered[df_filtered['keluhan'] != 'KOSONG']) / total_filtered * 100), 1)
-                p_sol = round((len(df_filtered[df_filtered['solusi'] != 'KOSONG']) / total_filtered * 100), 1)
                 p_kat = round((len(df_filtered[df_filtered['jenis_laporan'] != 'KOSONG']) / total_filtered * 100), 1)
+                p_sol = round((len(df_filtered[df_filtered['solusi'] != 'KOSONG']) / total_filtered * 100), 1)
                 
                 df_bar = pd.DataFrame({
-                    'Atribut': ['Identitas NIK', 'Teks Keluhan', 'Kategori', 'Teks Solusi'],
+                    'Atribut': ['Identitas NIK', 'Teks Keluhan Asli', 'Kategori Klasifikasi', 'Dokumentasi Solusi'],
                     'Terisi (%)': [p_id, p_kel, p_kat, p_sol]
                 })
-                fig_bar_stack = px.bar(df_bar, x='Terisi (%)', y='Atribut', orientation='h', color_discrete_sequence=['#10b981'])
+                fig_bar_stack = px.bar(df_bar, x='Terisi (%)', y='Atribut', orientation='h', color_discrete_sequence=['#10b981'], title="Evaluasi Kelengkapan Dok. (Terisi vs Kosong)")
                 fig_bar_stack.update_layout(xaxis=dict(range=[0, 100]), **layout_cfg)
                 st.plotly_chart(fig_bar_stack, use_container_width=True)
-                
-                st.markdown(f"<div class='penjelasan-box'><b>Insight Kelengkapan:</b> Bar chart di atas menunjukkan persentase kolom yang sudah memiliki teks. Kolom solusi mencatat kelengkapan terendah di angka {p_sol}%.</div>", unsafe_allow_html=True)
-                if st.button("🔍 Drill-Down: Tampilkan Laporan Tanpa Solusi", use_container_width=True):
-                    st.session_state.ana_drill_col = "solusi"
-                    st.session_state.ana_drill_val = "KOSONG"
-                    st.rerun()
-            else: st.info("Data kelengkapan tidak tersedia.")
+
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KELENGKAPAN:</b><br>Kategori klasifikasi yang paling banyak digunakan adalah '{kat_terbanyak}'. Namun, masih terdapat {jml_kat_kosong} data yang dilabeli sebagai 'Belum Diklasifikasi' (KOSONG). Admin diharapkan melengkapi kolom kategori dan solusi agar dokumentasi laporan historis semakin akurat.</div>", unsafe_allow_html=True)
+        if st.button("🔍 Tampilkan Laporan yang Kategori/Solusinya Masih Kosong pada Bagian E", use_container_width=True):
+            st.session_state.ana_drill_col = "solusi"
+            st.session_state.ana_drill_val = "KOSONG"
+            st.rerun()
 
         # =======================================================
-        # BAGIAN E: Detail Laporan (Tersinkronisasi)
+        # BAGIAN E: Detail Laporan Tersinkronisasi
         # =======================================================
-        st.markdown("<hr style='margin: 20px 0; border-top: 2px dashed #cbd5e1;'>", unsafe_allow_html=True)
-        st.markdown("#### Bagian E — Detail Laporan Tersinkronisasi")
+        st.markdown("<hr style='margin: 20px 0; border-top: 3px solid #cbd5e1;'>", unsafe_allow_html=True)
+        st.markdown("#### Bagian E: Detail Laporan Tersinkronisasi")
         
-        # Eksekusi Drill-Down
-        df_detail = df_filtered.copy()
-        is_drill_active = st.session_state.ana_drill_col is not None
+        cari_teks = st.text_input("🔍 Kotak Pencarian Teks Bebas: Cari ID, Nama, NIK, atau Keluhan...")
         
-        if is_drill_active:
-            col_filter = st.session_state.ana_drill_col
-            val_filter = st.session_state.ana_drill_val
-            
-            # Khusus untuk bulan yang di-cast jadi string
-            if col_filter == "Periode_Bulan_Str":
-                df_detail['Periode_Bulan_Str'] = df_detail['waktu_input_dt'].dt.to_period('M').astype(str)
-                df_detail = df_detail[df_detail['Periode_Bulan_Str'] == val_filter]
-            # Khusus untuk nama pasien (lowercase)
-            elif col_filter == "nama_clean":
-                df_detail['nama_clean'] = df_detail['nama_pasien'].str.lower().str.strip()
-                df_detail = df_detail[df_detail['nama_clean'] == val_filter]
-            else:
-                df_detail = df_detail[df_detail[col_filter] == val_filter]
-
-        # Status Indikator di Bagian E
-        total_drilldown = len(df_detail)
-        ce1, ce2 = st.columns([3, 1])
-        with ce1:
-            st.markdown(f"**Indikator Data:** Keseluruhan DB (**{total_db}**) ➔ Filter Tanggal (**{total_filtered}**) ➔ Tabel Aktif (**{total_drilldown}**)")
-            if is_drill_active:
-                st.warning(f"🎯 **Drill-Down Aktif:** Menampilkan filter khusus untuk: `{st.session_state.ana_drill_val}`")
-        with ce2:
-            if is_drill_active:
-                if st.button("❌ Hapus Filter Drill-Down Spesifik", use_container_width=True):
-                    st.session_state.ana_drill_col = None; st.session_state.ana_drill_val = None; st.rerun()
-        
-        # Search Box Teks Bebas
-        cari_teks = st.text_input("Pencarian Teks Bebas pada Tabel di bawah (Ketik ID, Nama, NIK, atau Keluhan):")
         if cari_teks:
             sq = cari_teks.lower()
-            df_detail = df_detail[df_detail['id'].astype(str).str.contains(sq) | df_detail['nama_pasien'].str.lower().str.contains(sq) | df_detail['no_bpjs'].str.lower().str.contains(sq) | df_detail['keluhan'].str.lower().str.contains(sq)]
+            df_drilldown = df_drilldown[df_drilldown['id'].astype(str).str.contains(sq) | df_drilldown['nama_pasien'].str.lower().str.contains(sq) | df_drilldown['no_bpjs'].str.lower().str.contains(sq) | df_drilldown['keluhan'].str.lower().str.contains(sq)]
 
-        df_view_final = df_detail[['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi', 'is_audited']].copy()
-        df_view_final = df_view_final.rename(columns={'id':'ID', 'waktu_input':'Tgl Logbook', 'nama_pasien':'Nama Pasien', 'no_bpjs':'NIK/BPJS', 'keluhan':'Keluhan', 'jenis_laporan':'Kategori', 'solusi':'Dokumentasi Solusi', 'is_audited':'Audit'})
+        df_view_final = df_drilldown[['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'keluhan', 'jenis_laporan', 'solusi']].copy()
+        df_view_final = df_view_final.rename(columns={'id':'ID', 'waktu_input':'Tgl Laporan', 'nama_pasien':'Nama Pasien', 'no_bpjs':'NIK/BPJS', 'keluhan':'Keluhan', 'jenis_laporan':'Kategori', 'solusi':'Solusi Terdata'})
         
         st.dataframe(df_view_final, use_container_width=True, hide_index=True)
         
-        st.markdown("<div style='font-size:12px; color:#64748b; margin-top:10px;'>⚠️ Peringatan Keterbatasan Historis: Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data administratif di sistem. Karena alur operasional aktual masa lalu tidak direkam secara memadai di dalam database, metrik ini tidak ditujukan untuk mengukur secara mutlak keberhasilan penyelesaian kasus, kinerja medis petugas, atau status operasional 'terbengkalai'.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warning-box'>⚠️ <b>Peringatan Keterbatasan Historis:</b> Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data di sistem. Karena alur operasional historis tidak direkam secara memadai, metrik ini tidak ditujukan untuk mengukur keberhasilan penyelesaian kasus, kinerja petugas medis, atau status 'terbengkalai'.</div>", unsafe_allow_html=True)
 
     # =========================================================
     # TAB 4: PUSAT EKSPOR & IMPOR DENGAN ANTI GANDA
@@ -621,7 +626,6 @@ else:
             if fil_stat: df_eks = df_eks[df_eks['status'].isin(fil_stat)]
             if fil_kat: df_eks = df_eks[df_eks['jenis_laporan'].isin(fil_kat)]
             
-            # DEFAULT BARU: Memastikan 'no_bpjs' dicentang agar NIK tidak tertinggal saat di-export
             kolom_pilih = st.multiselect("Kolom yang dicetak:", options=['id', 'waktu_input', 'nama_pasien', 'no_bpjs', 'no_telp', 'alamat', 'jenis_pasien', 'keluhan', 'tensi', 'suhu', 'jenis_laporan', 'subkategori', 'solusi', 'petugas', 'status'], default=['waktu_input', 'nama_pasien', 'no_bpjs', 'keluhan', 'solusi', 'status'])
             df_siap_ekspor = prepare_export_df(df_eks, kolom_pilih)
             
