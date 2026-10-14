@@ -20,7 +20,7 @@ except ImportError:
 # =====================================================================
 PIN_ADMIN_RAHASIA = "123456" 
 DB_PATH = "klinik_pipp.db"
-TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" 
+TELEGRAM_BOT_TOKEN = "PASTE_TOKEN_DISINI" # <-- Pastikan token Telegram aman
 
 def get_conn_write(): return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -30,6 +30,7 @@ def init_db():
     conn.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, whatsapp TEXT UNIQUE, bpjs TEXT, nik TEXT, consent_wa INTEGER DEFAULT 0, first_interaction_at DATETIME, last_interaction_at DATETIME)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS main_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT, icon TEXT, deskripsi TEXT, accent TEXT, light TEXT, tipe TEXT, urutan INTEGER)''')
     conn.commit()
+    conn.close()
 
 def upgrade_db():
     conn = get_conn_write()
@@ -43,39 +44,18 @@ def upgrade_db():
     if 'tensi' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN tensi TEXT DEFAULT ''")
     if 'suhu' not in columns: conn.execute("ALTER TABLE pipp ADD COLUMN suhu TEXT DEFAULT ''")
     conn.commit()
+    conn.close()
 
 init_db()
 upgrade_db()
 
 # =====================================================================
-# FUNGSI CEK & PEMBERSIH DUPLIKASI GANDA
+# FUNGSI CEK DUPLIKASI GANDA
 # =====================================================================
 def cek_duplikasi(conn, nama, keluhan, tgl_str):
     cur = conn.cursor()
     cur.execute("SELECT id FROM pipp WHERE LOWER(nama_pasien) = ? AND LOWER(keluhan) = ? AND waktu_input LIKE ?", (str(nama).lower().strip(), str(keluhan).lower().strip(), f"{tgl_str}%"))
     return cur.fetchone() is not None
-
-def bersihkan_data_ganda_db():
-    conn = get_conn_write()
-    df_temp = pd.read_sql_query("SELECT * FROM pipp", conn)
-    if df_temp.empty:
-        conn.close()
-        return 0
-    
-    df_temp['tgl_str'] = pd.to_datetime(df_temp['waktu_input'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df_temp['nama_clean'] = df_temp['nama_pasien'].astype(str).str.lower().str.strip()
-    df_temp['keluhan_clean'] = df_temp['keluhan'].astype(str).str.lower().str.strip()
-    
-    # Cari duplikat berdasarkan nama, keluhan, dan tanggal yang sama
-    duplikat = df_temp[df_temp.duplicated(subset=['nama_clean', 'keluhan_clean', 'tgl_str'], keep='first')]
-    ids_to_delete = duplikat['id'].tolist()
-    
-    if ids_to_delete:
-        cur = conn.cursor()
-        cur.executemany("DELETE FROM pipp WHERE id = ?", [(i,) for i in ids_to_delete])
-        conn.commit()
-    conn.close()
-    return len(ids_to_delete)
 
 def clean_text(text):
     if str(text).strip() in ['-', '', 'nan', 'Belum Diklasifikasi', 'Belum Ditentukan', '[MENUNGGU TINDAKAN]', 'None']: return '-'
@@ -105,6 +85,28 @@ def get_prepared_data():
     df.loc[is_baru & ~is_fresh, 'Smart_Status'] = 'Overdue'
     
     return df
+
+# =====================================================================
+# FUNGSI KALENDER HTML MURNI
+# =====================================================================
+def generate_html_calendar(year, month, data_dict):
+    cal = calendar.monthcalendar(year, month)
+    html = "<table style='width:100%; table-layout:fixed; border-collapse:collapse; text-align:center; font-family:Inter, sans-serif; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 20px;'>"
+    html += "<tr style='background-color:#1e293b; color:white;'><th style='padding:10px;'>Sen</th><th>Sel</th><th>Rab</th><th>Kam</th><th>Jum</th><th>Sab</th><th>Min</th></tr>"
+    for week in cal:
+        html += "<tr>"
+        for day in week:
+            if day == 0: html += "<td style='border:1px solid #e2e8f0; padding:15px; background-color:#f8fafc;'></td>"
+            else:
+                d = date(year, month, day)
+                count = data_dict.get(d, 0)
+                if count > 0: 
+                    html += f"<td style='border:1px solid #e2e8f0; padding:10px; background-color:#e0f2fe; font-weight:bold;'><span style='font-size:16px; color:#0f172a;'>{day}</span><br><br><span style='background-color:#ef4444; color:white; padding:3px 6px; border-radius:12px; font-size:11px; display:inline-block; margin-top:5px;'>{count} Laporan</span></td>"
+                else: 
+                    html += f"<td style='border:1px solid #e2e8f0; padding:10px; color:#94a3b8; font-size:16px;'>{day}</td>"
+        html += "</tr>"
+    html += "</table>"
+    return html
 
 # =====================================================================
 # FUNGSI EXPORT 
@@ -179,27 +181,6 @@ def create_template_excel():
     return output.getvalue()
 
 # =====================================================================
-# AKSES BUKTI LAMPIRAN VIA TELEGRAM
-# =====================================================================
-if "file_id" in st.query_params:
-    file_id = st.query_params["file_id"]
-    st.title("📥 Akses Lampiran Pasien")
-    pin = st.text_input("Masukkan PIN Keamanan Admin:", type="password")
-    if pin == PIN_ADMIN_RAHASIA:
-        with st.spinner("Mengambil file dari Telegram..."):
-            file_info_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
-            res = requests.get(file_info_url).json()
-            if res.get("ok"):
-                file_path = res["result"]["file_path"]
-                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-                file_bytes = requests.get(download_url).content
-                ext = file_path.split(".")[-1] if "." in file_path else "file"
-                st.download_button(label="⬇️ Download File Lampiran", data=file_bytes, file_name=f"Bukti_Laporan.{ext}")
-            else: st.error("Gagal! File tidak ditemukan.")
-    elif pin: st.error("PIN Salah!")
-    st.stop()
-
-# =====================================================================
 # PROGRAM UTAMA ADMIN
 # =====================================================================
 st.set_page_config(page_title="Dashboard Admin", layout="wide", initial_sidebar_state="collapsed")
@@ -210,7 +191,7 @@ st.markdown("""
     .custom-table { width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .custom-table th { background-color: #1e293b; color: white; padding: 10px; text-align: left; font-size: 13px; }
     .custom-table td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #334155; }
-    .custom-table tr:hover { background-color: #f8fafc; }
+    .custom-table tr:hover { background-color: #f1f5f9; }
     
     .badge-barumasuk { background-color: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 11px; }
     .badge-overdue { background-color: #fee2e2; color: #991b1b; padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 11px; }
@@ -240,10 +221,10 @@ else:
     
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🚀 Kelola Pasien & Histori", 
-        "📅 Kalender Laporan Instan", 
+        "📅 Kalender HTML Laporan", 
         "📊 Mega Analitik Historis", 
         "📑 Pusat Ekspor & Impor", 
-        "✍️ Input Data Cerdas", 
+        "✍️ Input Manual & AI Import", 
         "👥 Interaksi & Kategori"
     ])
 
@@ -443,7 +424,7 @@ else:
         ka3.metric("Progres Audit Historis", f"{pct_audit}%", f"{jml_audit} Divalidasi")
         ka4.metric("Kelengkapan Identitas", f"{pct_identitas}%", "Ada NIK/BPJS")
         
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KONDISI DATA:</b><br>Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem. Di sisi lain, kelengkapan pengisian NIK/BPJS mencapai {pct_identitas}%.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KONDISI DATA:</b><br>Dari {total_filtered} data pada periode yang dipilih, sebanyak {jml_sol_kosong} laporan ({pct_sol_kosong}%) belum memiliki dokumentasi tindakan/solusi yang tercatat di sistem (Catatan: ini hanya menunjukkan ketiadaan teks dokumentasi, bukan bukti laporan tidak ditangani). Di sisi lain, kelengkapan pengisian NIK/BPJS mencapai {pct_identitas}%.</div>", unsafe_allow_html=True)
 
         # =======================================================
         # BAGIAN B: Tren dan Pola Waktu Pencatatan
@@ -487,7 +468,7 @@ else:
                 if not hari_c.empty: hr_puncak = hari_c.loc[hari_c['Jumlah'].idxmax()]['Hari']
             else: st.info("Data harian tidak tersedia.")
             
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA WAKTU:</b><br>Pencatatan data tertinggi berada pada bulan {bln_puncak} sebanyak {jml_puncak_bln} data. Untuk pola mingguan, {hr_puncak} adalah hari dengan volume pencatatan paling banyak.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA WAKTU:</b><br>Pencatatan data tertinggi berada pada bulan {bln_puncak} sebanyak {jml_puncak_bln} data. Untuk pola mingguan, {hr_puncak} adalah hari dengan volume pencatatan paling banyak. Penyebab lonjakan atau penurunan ini belum dapat disimpulkan murni dari data historis.</div>", unsafe_allow_html=True)
         if bln_puncak != "-" and st.button(f"🔍 Tampilkan Laporan di Bulan {bln_puncak} pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "Periode_Bulan_Str"
             st.session_state.ana_drill_val = bln_puncak
@@ -527,7 +508,7 @@ else:
                 if not kel_c.empty: kel_terbanyak = kel_c.iloc[0]['Teks Keluhan Asli']
             else: st.info("Data keluhan kosong.")
             
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA PASIEN & KELUHAN:</b><br>Nama yang paling sering tercatat adalah '{pas_terbanyak}' dengan {jml_pas_terbanyak} kemunculan. Teks keluhan mentah yang paling banyak diketik adalah '{kel_terbanyak}'.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT POLA PASIEN & KELUHAN:</b><br>Nama yang paling sering tercatat adalah '{pas_terbanyak}' dengan {jml_pas_terbanyak} kemunculan. Teks keluhan mentah yang paling banyak diketik adalah '{kel_terbanyak}'.<br>Keterbatasan: Sistem menggunakan pencocokan teks persis. Variasi ejaan (misal 'Sri Rahayu' vs 'sri rahayu') atau kesalahan ketik dihitung terpisah, sehingga tidak bisa diklaim mutlak sebagai individu yang sama tanpa validasi NIK.</div>", unsafe_allow_html=True)
         if pas_terbanyak != "-" and st.button(f"🔍 Tampilkan Riwayat Nama '{pas_terbanyak}' pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "nama_clean"
             st.session_state.ana_drill_val = pas_terbanyak
@@ -573,7 +554,7 @@ else:
                 fig_bar_stack.update_layout(xaxis=dict(range=[0, 100]), **layout_cfg)
                 st.plotly_chart(fig_bar_stack, use_container_width=True)
 
-        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KELENGKAPAN:</b><br>Kategori klasifikasi yang paling banyak digunakan adalah '{kat_terbanyak}'. Namun, masih terdapat {jml_kat_kosong} data yang dilabeli sebagai 'Belum Diklasifikasi' (KOSONG).</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-box'>💡 <b>INSIGHT KELENGKAPAN:</b><br>Kategori klasifikasi yang paling banyak digunakan adalah '{kat_terbanyak}'. Namun, masih terdapat {jml_kat_kosong} data yang dilabeli sebagai 'Belum Diklasifikasi' (KOSONG). Admin diharapkan melengkapi kolom kategori dan solusi agar dokumentasi laporan historis semakin akurat.</div>", unsafe_allow_html=True)
         if st.button("🔍 Tampilkan Laporan yang Kategori/Solusinya Masih Kosong pada Bagian E", use_container_width=True):
             st.session_state.ana_drill_col = "solusi"
             st.session_state.ana_drill_val = "KOSONG"
@@ -596,27 +577,13 @@ else:
         
         st.dataframe(df_view_final, use_container_width=True, hide_index=True)
         
-        st.markdown("<div class='warning-box'>⚠️ <b>Peringatan Keterbatasan Historis:</b> Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data di sistem.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warning-box'>⚠️ <b>Peringatan Keterbatasan Historis:</b> Statistik di atas difokuskan pada evaluasi KUALITAS dan KELENGKAPAN PENCATATAN data di sistem. Karena alur operasional historis tidak direkam secara memadai, metrik ini tidak ditujukan untuk mengukur keberhasilan penyelesaian kasus, kinerja petugas medis, atau status 'terbengkalai'.</div>", unsafe_allow_html=True)
 
     # =========================================================
     # TAB 4: PUSAT EKSPOR & IMPOR 
     # =========================================================
     with tab4:
         st.markdown("<h4 style='color:#0f172a;'>📑 Pusat Ekspor & Impor Data Klinik</h4>", unsafe_allow_html=True)
-        
-        # FITUR TAMBAHAN: TOMBOL PEMBERSIH DUPLIKAT HISTORIS
-        with st.container(border=True):
-            st.markdown("##### 🧹 Pembersih Data Ganda (Deduplication Tool)")
-            st.info("Jika database Anda terlanjur memiliki data duplikat dari masa lalu (kesalahan impor sebelumnya), klik tombol di bawah untuk membersihkannya secara otomatis.")
-            if st.button("🧼 Hapus Semua Data Ganda di Database Sekarang", type="primary"):
-                jml_dihapus = bersihkan_data_ganda_db()
-                if jml_dihapus > 0:
-                    st.success(f"Berhasil membersihkan dan menghapus {jml_dihapus} data ganda dari database!")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.info("Tidak ditemukan data ganda di dalam database. Data sudah bersih!")
-
         with st.container(border=True):
             st.markdown("##### 🔍 1. Ekspor Data Spesifik Terfilter")
             df_eks = df_master.copy()
@@ -646,7 +613,7 @@ else:
         c_ex1, c_ex2 = st.columns(2)
         with c_ex1:
             with st.container(border=True):
-                st.markdown("##### 📥 2. Impor Data Massal (Sistem Anti Ganda)")
+                st.markdown("##### 📥 2. Impor Data Massal ke Sistem")
                 st.download_button("⬇️ Download Template Excel", create_template_excel(), "Template_Upload.xlsx")
                 uploaded_file = st.file_uploader("Upload file Excel:", type=['xlsx'])
                 if uploaded_file is not None:
@@ -655,27 +622,20 @@ else:
                             df_import = pd.read_excel(uploaded_file)
                             conn = get_conn_write()
                             if 'Nama Pasien' in df_import.columns and 'Keluhan Awal' in df_import.columns:
-                                dup_count = 0
-                                dup_names = []
-                                ins_count = 0
                                 for index, row in df_import.iterrows():
                                     if str(row['Nama Pasien']) == 'Contoh Nama': continue
                                     imp_waktu = str(row['Tanggal Laporan']) if pd.notna(row['Tanggal Laporan']) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     imp_nama = str(row['Nama Pasien']) if pd.notna(row['Nama Pasien']) else ""
                                     imp_keluhan = str(row['Keluhan Awal']) if pd.notna(row['Keluhan Awal']) else ""
-                                    
+                                    imp_bpjs = str(row['No. Identitas (BPJS/NIK)']) if pd.notna(row['No. Identitas (BPJS/NIK)']) else ""
+                                    imp_telp = str(row['No. WhatsApp/HP']) if pd.notna(row['No. WhatsApp/HP']) else ""
+                                    imp_kat = str(row['Kategori']) if pd.notna(row['Kategori']) else ""
+                                    imp_solusi = str(row['Tindakan / Solusi']) if pd.notna(row['Tindakan / Solusi']) else ""
+                                    imp_petugas = str(row['Nama Petugas']) if pd.notna(row['Nama Petugas']) else ""
+                                    imp_status = str(row['Status']) if pd.notna(row['Status']) else "Baru"
                                     if imp_nama and imp_keluhan:
-                                        tgl_cek = imp_waktu[:10]
-                                        if cek_duplikasi(conn, imp_nama, imp_keluhan, tgl_cek):
-                                            dup_count += 1
-                                            if imp_nama not in dup_names: dup_names.append(imp_nama)
-                                        else:
-                                            conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, no_telp, jenis_laporan, keluhan, solusi, petugas, status) VALUES (?,?,?,?,?,?,?,?,?,?)''', (imp_waktu, imp_waktu, str(row.get('No. Identitas (BPJS/NIK)','')), imp_nama, str(row.get('No. WhatsApp/HP','')), str(row.get('Kategori','')), imp_keluhan, str(row.get('Tindakan / Solusi','')), str(row.get('Nama Petugas','')), str(row.get('Status','Baru'))))
-                                            ins_count += 1
-                                conn.commit(); st.cache_data.clear()
-                                st.success(f"✅ Impor Berhasil! ({ins_count} Data masuk).")
-                                if dup_count > 0:
-                                    st.error(f"⛔ SISTEM MENCEGAH {dup_count} DATA GANDA! \nPasien berikut mencoba menginput keluhan yang sama di hari yang sama: {', '.join(dup_names)}")
+                                        conn.execute('''INSERT INTO pipp (waktu_input, waktu_selesai, no_bpjs, nama_pasien, no_telp, jenis_laporan, keluhan, solusi, petugas, status) VALUES (?,?,?,?,?,?,?,?,?,?)''', (imp_waktu, imp_waktu, imp_bpjs, imp_nama, imp_telp, imp_kat, imp_keluhan, imp_solusi, imp_petugas, imp_status))
+                                conn.commit(); st.cache_data.clear(); st.success("✅ Impor Data Berhasil!"); st.rerun()
                             else: st.error("Gagal! Gunakan template excel yang disediakan.")
                         except Exception as e: st.error(f"Error membaca Excel: {e}")
 
@@ -782,7 +742,9 @@ Keluhan: [Tulis Keluhan Lengkap]""", language="text")
     # =========================================================
     with tab6:
         st.markdown("#### 👥 Database Kontak & Kategori")
-        try: st.dataframe(pd.read_sql_query("SELECT * FROM contacts ORDER BY last_interaction_at DESC", conn), use_container_width=True)
+        conn_tab6 = get_conn_write()
+        try: st.dataframe(pd.read_sql_query("SELECT * FROM contacts ORDER BY last_interaction_at DESC", conn_tab6), use_container_width=True)
         except: pass
-        try: st.dataframe(pd.read_sql_query("SELECT * FROM main_categories", conn), use_container_width=True)
+        try: st.dataframe(pd.read_sql_query("SELECT * FROM main_categories", conn_tab6), use_container_width=True)
         except: pass
+        conn_tab6.close()
